@@ -100,7 +100,7 @@ def default_config() -> Config:
     )
 
 
-def _cfg_to_dict(cfg: Config) -> dict[str, Any]:
+def config_to_dict(cfg: Config) -> dict[str, Any]:
     return {
         "version": cfg.version,
         "user": {"git_author_patterns": cfg.user.git_author_patterns},
@@ -119,7 +119,7 @@ def _cfg_to_dict(cfg: Config) -> dict[str, Any]:
     }
 
 
-def _dict_to_cfg(data: dict[str, Any]) -> Config:
+def config_from_dict(data: dict[str, Any]) -> Config:
     defaults = default_config()
     try:
         user_d = data.get("user", {}) or {}
@@ -218,11 +218,11 @@ def load_config(path: Optional[Path] = None) -> Config:
         raise ConfigError(f"config.json at {p} is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise ConfigError(f"config.json at {p} must contain a JSON object at the top level")
-    return _dict_to_cfg(raw)
+    return config_from_dict(raw)
 
 
 def save_config(cfg: Config, path: Optional[Path] = None) -> Path:
     p = path or config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(_cfg_to_dict(cfg), indent=2) + "\n", encoding="utf-8")
+    p.write_text(json.dumps(config_to_dict(cfg), indent=2) + "\n", encoding="utf-8")
     return p

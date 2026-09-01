@@ -114,6 +114,25 @@ def load_report(conn: "sqlite3.Connection", day: str) -> Report:
     )
 
 
+def day_overview(conn: "sqlite3.Connection", day: str) -> Dict[str, object]:
+    """A cheap per-day summary (no draft/commit-list detail) for GET
+    /api/days — status is None for a day with no day_summaries row yet
+    (Phase 7's History view renders that as "Missed")."""
+    total_minutes = sum(b.minutes for b in _load_activity_blocks(conn, day))
+    commit_count = len(storage.get_commits(conn, day))
+    summary = storage.get_day_summary(conn, day)
+    return {
+        "day": day,
+        "status": summary.status if summary else None,
+        "total_tracked_minutes": round(total_minutes, 1),
+        "commit_count": commit_count,
+    }
+
+
+def list_days_overview(conn: "sqlite3.Connection", limit: int = 30) -> List[Dict[str, object]]:
+    return [day_overview(conn, d) for d in storage.list_known_days(conn, limit)]
+
+
 def generate_report(config: "Config", conn: "sqlite3.Connection", day: str) -> Report:
     """refresh_day() + load_report(), with the just-collected availability
     overlaid so the result accurately reflects this run, not a guess."""

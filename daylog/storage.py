@@ -321,6 +321,23 @@ def get_last_activity_end(conn: sqlite3.Connection) -> Optional[str]:
     return row["end"] if row else None
 
 
+def list_known_days(conn: sqlite3.Connection, limit: int = 30) -> list[str]:
+    """Every day with *any* footprint (tracked activity, a generated
+    summary, cached commits, or cached meetings), most recent first. Used
+    by GET /api/days — a day can show up here before it ever has a
+    day_summaries row (e.g. tracked today, not yet reported)."""
+    rows = conn.execute(
+        "SELECT day FROM ("
+        "  SELECT day FROM activity_blocks"
+        "  UNION SELECT day FROM day_summaries"
+        "  UNION SELECT day FROM commits_cache"
+        "  UNION SELECT day FROM meetings_cache"
+        ") ORDER BY day DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [r["day"] for r in rows]
+
+
 # --- commits_cache / wip_cache / meetings_cache ------------------------------
 # These are wholesale-replaced on each collection run: the collector always
 # has the full current picture for `day`, so we drop old rows and reinsert

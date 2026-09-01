@@ -8,11 +8,11 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phases 1–5 (skeleton/storage, window tracking,
-git collector, calendar collector, report generation) are done.** The
-JSON API and the web UI land in later phases.
+This is a phased build. **Phases 1–6 (skeleton/storage, window tracking,
+git collector, calendar collector, report generation, JSON API) are
+done.** The web UI and packaging/autostart land in later phases.
 
-## Status: Phase 5
+## Status: Phase 6
 
 What exists right now:
 
@@ -259,6 +259,37 @@ EOF
   name + window title using `config.categories`, first match wins,
   computed once per activity block at tracking time (Phase 2) rather
   than at report time.
+
+## The JSON API
+
+Not started automatically yet — `daylog ui` (Phase 7) is what will run
+it — but you can try it now:
+
+```bash
+python3 -c "import uvicorn; from daylog.server.app import app; uvicorn.run(app, host='127.0.0.1', port=8765)"
+```
+
+Bound to `127.0.0.1` only (`config.server.host` rejects anything else at
+the config layer — see `config._validate`), no authentication, because
+nothing but localhost can ever reach it. All aggregation happens in
+`report.builder`/`report.render`; every route below just validates input
+and calls those.
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/days?limit=30` | Per-day overview (status, total tracked minutes, commit count) for the most recent days with any footprint. `status` is `null` for a day that's been tracked but never reported. |
+| `GET /api/days/{date}` | The full report as JSON — same shape as `daylog report --json`. Read-only: never touches git/calendar/network. A date with no data returns an empty report, not an error. |
+| `POST /api/days/{date}/regenerate` | Re-runs the collectors and replaces that day's cache (same semantics as `daylog report`). Blocked (`409`) on a submitted day. Response includes `had_unsaved_edits: bool` — edited text is never destroyed, but this tells the caller it's now stale. |
+| `PUT /api/days/{date}/summary` | Body `{"edited_md": "..."}`. Saves hand-edited text. Blocked (`409`) on a submitted day. |
+| `POST /api/days/{date}/submit` | Marks the day submitted (`409` if there's no summary yet). |
+| `POST /api/days/{date}/reopen` | Undoes submit. |
+| `GET /api/status` | `{tracker_running, tracker_pid, last_sample_at}`. |
+| `GET /api/config` / `PUT /api/config` | Read/replace the full config as JSON — same validation as `config.json` on disk (rejects a non-local `server.host`, etc). |
+
+`GET /api/days/{date}`'s `timeline` array carries `{start, end, category,
+app, title}` per block — `app`/`title` beyond the minimum so the web
+UI's timeline hover (Phase 7) can show what was actually open, without a
+second request.
 
 ## Design notes for later phases
 
