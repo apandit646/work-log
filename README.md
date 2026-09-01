@@ -8,11 +8,11 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phase 1 (skeleton and storage) is done.**
-Window tracking, git/calendar collectors, report generation, the JSON
-API, and the web UI land in later phases.
+This is a phased build. **Phases 1–2 (skeleton/storage, window tracking)
+are done.** Git/calendar collectors, report generation, the JSON API, and
+the web UI land in later phases.
 
-## Status: Phase 1
+## Status: Phase 2
 
 What exists right now:
 
@@ -21,9 +21,15 @@ What exists right now:
 - `daylog doctor` — checks Python version, git presence, platform-specific
   window-tracking prerequisites, config validity, and database
   writability; prints a pass/fail line for each.
-- `daylog track` / `report` / `status` / `ui` exist as real subcommands
-  (so `--help` shows the full planned shape of the tool) but currently
-  just print which phase implements them.
+- `daylog track` — runs in the foreground, polling the active window and
+  idle time and writing merged time blocks to `activity_blocks`. Stop it
+  with Ctrl+C. Refuses to start a second instance while one is already
+  running (tracked via a pidfile at `~/.daylog/tracker.pid`).
+- `daylog status` — reports whether the tracker is running and when it
+  last recorded a sample.
+- `daylog report` / `ui` exist as real subcommands (so `--help` shows the
+  full planned shape of the tool) but currently just print which phase
+  implements them.
 
 ## Install (development)
 
@@ -40,6 +46,13 @@ Requires Python 3.9+ and no admin/root privileges.
 ```bash
 daylog init
 daylog doctor
+daylog track      # runs until you press Ctrl+C
+```
+
+In another terminal, while `track` is running:
+
+```bash
+daylog status
 ```
 
 `daylog init` is safe to re-run — it won't overwrite an existing
@@ -97,11 +110,41 @@ defaults on next load.
 - `config.json` parses and passes validation.
 - The database file can be opened and queried.
 
+## How window tracking works
+
+- `daylog track` polls the active window and idle time every
+  `tracking.poll_interval_seconds`. Consecutive polls of the same
+  app+title on the same day extend one `activity_blocks` row's `end`
+  column; a different window, an idle gap, or a day boundary starts a new
+  row.
+- **Kill-safe by construction**: the currently-open block's `end` is
+  updated in the database on *every* matching poll, not just when the
+  block finishes. So a sleep/reboot/crash loses at most one
+  `poll_interval_seconds` of data, and restarting afterwards just begins
+  a fresh block — nothing already written is touched, and nothing is
+  double-counted.
+- When idle time crosses `tracking.idle_threshold_seconds`, the current
+  block is closed (at its last real update) and nothing is recorded
+  until activity resumes; the idle gap itself is never written as a
+  block.
+- `daylog track` refuses to start a second instance (checked via
+  `~/.daylog/tracker.pid`); `daylog status` reports whether it's running
+  and reads the same pidfile, self-healing if the file is stale (process
+  no longer exists).
+- **Linux**: tries `xdotool` first, falls back to `xprop`; idle time
+  tries `xprintidle`, falls back to the X11 screensaver extension via
+  ctypes. Under Wayland, none of these see real window titles — `daylog
+  doctor`/`track` print a warning up front rather than silently recording
+  nothing.
+- **Windows**: `ctypes` against `user32`/`kernel32`
+  (`GetForegroundWindow`, `QueryFullProcessImageNameW`,
+  `GetLastInputInfo`) — no `pywin32` dependency.
+
 ## Design notes for later phases
 
 - `activity_blocks` stores merged time ranges (start/end per
-  app+category), not one row per poll — the window tracker (Phase 2) is
-  responsible for merging consecutive same-window samples before writing.
+  app+category), not one row per poll — see "How window tracking works"
+  above.
 - `commits_cache` and `meetings_cache` are snapshots per day, refreshed
   wholesale each time the collectors run, so an old report still renders
   correctly after a repo is deleted or a meeting is removed from the

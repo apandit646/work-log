@@ -288,6 +288,20 @@ def get_activity_blocks(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]
     ).fetchall()
 
 
+def update_activity_block_end(conn: sqlite3.Connection, block_id: int, end: str) -> None:
+    """Extends an in-progress block. Called on every poll where the active
+    window hasn't changed, which is what makes tracking kill-safe — see
+    tracker.py."""
+    conn.execute("UPDATE activity_blocks SET end = ? WHERE id = ?", (end, block_id))
+
+
+def get_last_activity_end(conn: sqlite3.Connection) -> Optional[str]:
+    """Most recent `end` across all days — used for 'last sample time' in
+    `daylog status` and the future GET /api/status endpoint."""
+    row = conn.execute("SELECT end FROM activity_blocks ORDER BY id DESC LIMIT 1").fetchone()
+    return row["end"] if row else None
+
+
 # --- commits_cache / wip_cache / meetings_cache ------------------------------
 # These are wholesale-replaced on each collection run: the collector always
 # has the full current picture for `day`, so we drop old rows and reinsert

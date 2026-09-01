@@ -1,7 +1,15 @@
 import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
 
+from daylog import pidfile
 from daylog.cli import main
 from daylog.paths import config_path, db_path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_init_creates_config_and_database(daylog_home, capsys):
@@ -56,8 +64,69 @@ def test_doctor_runs_after_init(daylog_home, capsys):
 
 
 def test_unimplemented_subcommands_exit_cleanly(daylog_home, capsys):
-    for args in (["track"], ["report"], ["status"], ["ui"]):
+    for args in (["report"], ["ui"]):
         exit_code = main(args)
         assert exit_code == 1
         out = capsys.readouterr().out
         assert "isn't implemented yet" in out
+
+
+def test_status_before_anything_has_run(daylog_home, capsys):
+    exit_code = main(["status"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Tracker is not running." in out
+    assert "No activity has been recorded yet." in out
+
+
+def test_status_reports_running_tracker(daylog_home, capsys):
+    pidfile.write_pidfile()
+    exit_code = main(["status"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert f"pid {os.getpid()}" in out
+
+
+def test_track_refuses_to_start_a_second_instance(daylog_home, capsys):
+    main(["init"])
+    pidfile.write_pidfile()  # simulate an already-running tracker (this test process)
+
+    exit_code = main(["track"])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "already running" in out
+
+
+def test_track_writes_a_pidfile_and_a_hard_kill_is_detected_as_stopped(daylog_home):
+    main(["init"])
+    env = os.environ.copy()
+    env["DAYLOG_HOME"] = str(daylog_home)
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "daylog.cli", "track"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        pid_path = pidfile.pidfile_path()
+        for _ in range(100):
+            if pid_path.exists():
+                break
+            time.sleep(0.05)
+        assert pid_path.exists(), "tracker subprocess never wrote a pidfile"
+
+        running, pid = pidfile.tracker_status()
+        assert running is True
+        assert pid == proc.pid
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+    # A hard kill (no chance to run the `finally: remove_pidfile()` cleanup)
+    # must still be detected as "not running" on the next check, not stay
+    # stuck reporting a dead pid as alive forever.
+    running, pid = pidfile.tracker_status()
+    assert (running, pid) == (False, None)
