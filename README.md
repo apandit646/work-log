@@ -8,11 +8,13 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phases 1–7 (skeleton/storage, window tracking,
-git collector, calendar collector, report generation, JSON API, web UI)
-are done.** Packaging/autostart and the tray icon land in Phase 8.
+This is a phased build. **All planned phases (1–8: skeleton/storage,
+window tracking, git collector, calendar collector, report generation,
+JSON API, web UI, packaging/autostart) are done.** Phase 9 (optional LLM
+draft-polishing, a read-only week dashboard) is unbuilt — it's explicitly
+opt-in scope, only built if asked for.
 
-## Status: Phase 7
+## Status: Phase 8 (feature-complete)
 
 What exists right now:
 
@@ -20,21 +22,14 @@ What exists right now:
   SQLite database.
 - `daylog doctor` — checks Python version, git presence, platform-specific
   window-tracking prerequisites, config validity, and database
-  writability; prints a pass/fail line for each.
+  writability; prints a pass/fail line for each. `GET /api/doctor` and
+  the Settings screen's Run doctor button run the exact same checks.
 - `daylog track` — runs in the foreground, polling the active window and
   idle time and writing merged time blocks to `activity_blocks`. Stop it
   with Ctrl+C. Refuses to start a second instance while one is already
   running (tracked via a pidfile at `~/.daylog/tracker.pid`).
 - `daylog status` — reports whether the tracker is running and when it
   last recorded a sample.
-- `daylog report [--date] [--copy] [--out] [--json]` — generates the full
-  report and persists the timesheet draft.
-- `daylog ui [--no-browser]` — starts the local web UI (see below) and
-  opens it in a browser.
-- `daylog.collectors.git` — discovers repos under `git.scan_paths`,
-  collects today's commits (across all local branches, deduplicated,
-  filtered to your identity) with lines added/removed, and lists
-  uncommitted work in progress.
 - `daylog report [--date YYYY-MM-DD] [--copy] [--out FILE] [--json]` —
   generates the full Markdown report (time by category with a text bar
   chart, meetings, commits by repo, work in progress, top windows, and
@@ -45,19 +40,45 @@ What exists right now:
   into an office form. `--copy` copies it to the clipboard (via `clip`
   on Windows, `xclip`/`xsel` on Linux — no new dependency); `--out FILE`
   writes the full Markdown report to a file; `--json` prints the same
-  data as JSON instead. Refuses to touch an
-  already-submitted day; warns (without blocking or discarding) if
-  you've hand-edited that day's summary since it was last generated.
+  data as JSON instead. Refuses to touch an already-submitted day; warns
+  (without blocking or discarding) if you've hand-edited that day's
+  summary since it was last generated.
+- `daylog ui [--no-browser]` — starts the local web UI and JSON API (see
+  below) and opens it in a browser.
+- `daylog install` / `daylog uninstall` — sets up (or removes) `daylog
+  track` running automatically in the background: a systemd user unit on
+  Linux, a Task Scheduler entry (via `pythonw.exe`, no console window) on
+  Windows. No admin/root needed for either. `uninstall` also stops a
+  currently running tracker.
+- `daylog tray` — an optional system tray icon (needs `pip install
+  daylog[tray]`) showing whether tracking is on, with a menu to open the
+  UI, toggle tracking, and quit. Everything else works fully without
+  it — a missing/broken tray backend (common on Linux; this exact
+  environment has no display at all) prints a clear message and exits
+  cleanly rather than crashing.
+- `daylog.collectors.git` — discovers repos under `git.scan_paths`,
+  collects today's commits (across all local branches, deduplicated,
+  filtered to your identity) with lines added/removed, and lists
+  uncommitted work in progress.
 
-## Install (development)
+## Install
+
+```bash
+pipx install .                 # from a checkout of this repo
+pipx install ".[tray]"         # ...and also want the optional tray icon
+```
+
+Requires Python 3.9+. No admin/root privileges needed for the install
+itself, nor for `daylog install`'s autostart setup (a systemd `--user`
+unit and a per-user Task Scheduler entry both work without elevation).
+
+For development instead:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # or .venv\Scripts\activate on Windows
 pip install -e ".[dev]"
 ```
-
-Requires Python 3.9+ and no admin/root privileges.
 
 ## Try it
 
@@ -71,11 +92,20 @@ In another terminal, while `track` is running:
 
 ```bash
 daylog status
+daylog ui          # the full web UI, once you have a day's worth of data
 ```
 
 `daylog init` is safe to re-run — it won't overwrite an existing
 `config.json` unless you pass `--force`. It always re-runs database
 migrations, which are idempotent.
+
+To have `daylog track` start automatically instead of running it
+yourself every session:
+
+```bash
+daylog install      # systemd --user unit (Linux) / Task Scheduler entry (Windows)
+daylog uninstall     # removes it again, and stops a currently running tracker
+```
 
 ## Run the tests
 
@@ -337,7 +367,29 @@ Light and dark mode both work (`prefers-color-scheme`, no toggle needed)
 via CSS custom properties in `style.css` — no CSS framework, and it's
 kept under 400 lines.
 
-## Design notes for later phases
+## How autostart and the tray icon work
+
+- `daylog install` (`daylog/autostart.py`) writes a systemd `--user` unit
+  (`~/.config/systemd/user/daylog-tracker.service`, `ExecStart` pointing
+  at the current interpreter running `daylog.cli track`) on Linux, or
+  registers a Task Scheduler entry that runs at logon via `pythonw.exe`
+  (no console window; falls back to the regular interpreter if
+  `pythonw.exe` isn't found next to it) on Windows — via `schtasks`, no
+  extra dependency. Neither needs admin/root. `daylog uninstall` removes
+  the unit/task and, if a tracker is currently running, stops it too.
+- The tray icon (`daylog/tray.py`) is built from `pystray` + `Pillow`,
+  imported only when `daylog tray` actually runs — they're an optional
+  extra (`pip install daylog[tray]`), never a dependency of the core
+  tool. A dot icon (colored when tracking, gray when not) with a menu:
+  Open daylog, Start/Stop tracking, Quit; it polls tracker status every
+  5 seconds to keep itself current. If pystray isn't installed, or the
+  platform has no working tray/notification-area backend (this
+  environment's headless container, for instance, has no display at
+  all) `daylog tray` catches that and prints a clear message pointing at
+  `daylog track`/`daylog ui` instead of crashing — everything else in
+  daylog works fully without the tray icon.
+
+## Design notes
 
 - `activity_blocks` stores merged time ranges (start/end per
   app+category), not one row per poll — see "How window tracking works"

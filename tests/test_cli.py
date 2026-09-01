@@ -131,3 +131,57 @@ def test_track_writes_a_pidfile_and_a_hard_kill_is_detected_as_stopped(daylog_ho
     # stuck reporting a dead pid as alive forever.
     running, pid = pidfile.tracker_status()
     assert (running, pid) == (False, None)
+
+
+def test_install_and_uninstall_dispatch_through_autostart(daylog_home, capsys, monkeypatch):
+    from daylog import autostart
+
+    monkeypatch.setattr(autostart, "install", lambda: (True, "installed ok"))
+    monkeypatch.setattr(autostart, "uninstall", lambda: (True, "uninstalled ok"))
+
+    exit_code = main(["install"])
+    assert exit_code == 0
+    assert "installed ok" in capsys.readouterr().out
+
+    exit_code = main(["uninstall"])
+    assert exit_code == 0
+    assert "uninstalled ok" in capsys.readouterr().out
+
+
+def test_install_reports_failure_with_nonzero_exit(daylog_home, capsys, monkeypatch):
+    from daylog import autostart
+
+    monkeypatch.setattr(autostart, "install", lambda: (False, "could not install"))
+
+    exit_code = main(["install"])
+    assert exit_code == 1
+    assert "could not install" in capsys.readouterr().out
+
+
+def test_uninstall_also_stops_a_running_tracker(daylog_home, capsys, monkeypatch):
+    from daylog import autostart, pidfile, tracker_process
+
+    monkeypatch.setattr(autostart, "uninstall", lambda: (True, "uninstalled ok"))
+    monkeypatch.setattr(pidfile, "tracker_status", lambda: (True, 4242))
+    monkeypatch.setattr(tracker_process, "stop_tracker", lambda: True)
+
+    exit_code = main(["uninstall"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "uninstalled ok" in out
+    assert "Stopped the currently running tracker." in out
+
+
+def test_tray_without_pystray_installed_gives_a_clear_error(daylog_home, capsys):
+    main(["init"])
+    exit_code = main(["tray"])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "pystray" in out
+    assert "daylog works fully without" in out
+
+
+def test_tray_without_config_gives_a_clear_error(daylog_home, capsys):
+    exit_code = main(["tray"])
+    assert exit_code == 1
+    assert "daylog init" in capsys.readouterr().out

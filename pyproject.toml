@@ -18,8 +18,11 @@ readme = "README.md"
 #                               this is icalendar's own recommended pair.
 #   fastapi        (Phase 6) — JSON API server for the web UI.
 #   uvicorn        (Phase 6) — ASGI server to run the FastAPI app.
-#   pystray        (Phase 8) — optional system tray icon; the tool must
-#                               work fully without it.
+#
+# pystray/Pillow (Phase 8, system tray icon) are deliberately NOT core
+# dependencies — see [project.optional-dependencies].tray below — because
+# "make the tool work fully without it" means `pip install daylog` must
+# not require a working tray/notification-area stack at all.
 dependencies = [
     "icalendar>=5.0",
     "python-dateutil>=2.8",
@@ -33,6 +36,13 @@ dev = [
     "pytest>=7.0",
     "httpx2>=2.0",  # required by fastapi.testclient.TestClient (starlette's HTTP client dependency)
 ]
+# `pip install daylog[tray]` / `pipx install ".[tray]"` — 'daylog tray'
+# prints a clear "install the tray extra" message and exits 1 without this;
+# every other command works with just the core dependencies.
+tray = [
+    "pystray>=0.19",
+    "Pillow>=9.0",  # pystray's own icon-image backend
+]
 
 [project.scripts]
 daylog = "daylog.cli:main"
@@ -43,3 +53,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["daylog*"]
+
+[tool.setuptools.package-data]
+# daylog/web/ isn't a Python package (no __init__.py, just static
+# assets) so packages.find won't pick it up on its own — this ensures
+# index.html/app.js/style.css ship in the installed wheel, not just the
+# source checkout.
+daylog = ["web/*"]

@@ -1,4 +1,5 @@
-"""argparse entry point: init, doctor, track, report, status, ui.
+"""argparse entry point: init, doctor, track, report, status, ui, tray,
+install, uninstall.
 
 All subcommands are implemented.
 """
@@ -13,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import clipboard, doctor, pidfile, storage
+from . import autostart, clipboard, doctor, pidfile, storage, tracker_process
 from .collectors import window as window_collector
 from .config import ConfigError, config_path, default_config, load_config, save_config
 from .paths import db_path
@@ -211,6 +212,45 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tray(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        print(f"Cannot start the tray icon: {exc}")
+        return 1
+
+    from .tray import run_tray
+
+    try:
+        run_tray(cfg)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
+    except Exception as exc:  # last-resort guard — see the module docstring
+        print(f"Tray icon failed to start: {exc}")
+        print("daylog works fully without it — use 'daylog track' and 'daylog ui' instead.")
+        return 1
+    return 0
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    ok, message = autostart.install()
+    print(message)
+    return 0 if ok else 1
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    ok, message = autostart.uninstall()
+    print(message)
+    running, _ = pidfile.tracker_status()
+    if running:
+        if tracker_process.stop_tracker():
+            print("Stopped the currently running tracker.")
+        else:
+            print("Could not confirm the currently running tracker stopped in time.")
+    return 0 if ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="daylog", description="Local-first daily activity tracker and timesheet drafter."
@@ -240,6 +280,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui = sub.add_parser("ui", help="Start the local web UI and open it in a browser.")
     p_ui.add_argument("--no-browser", action="store_true", help="Don't automatically open a browser window")
     p_ui.set_defaults(func=cmd_ui)
+
+    p_tray = sub.add_parser(
+        "tray", help="Show a system tray icon (optional; requires the 'tray' extra)."
+    )
+    p_tray.set_defaults(func=cmd_tray)
+
+    p_install = sub.add_parser(
+        "install", help="Set daylog track to run automatically in the background (systemd/Task Scheduler)."
+    )
+    p_install.set_defaults(func=cmd_install)
+
+    p_uninstall = sub.add_parser("uninstall", help="Remove the autostart entry created by 'daylog install'.")
+    p_uninstall.set_defaults(func=cmd_uninstall)
 
     return parser
 
