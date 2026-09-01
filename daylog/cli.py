@@ -1,9 +1,6 @@
 """argparse entry point: init, doctor, track, report, status, ui.
 
-init, doctor, track, status, and report are implemented. ui is wired up
-as a real subcommand (so `daylog --help` already shows the full shape of
-the tool) but prints a friendly "not implemented yet" message and exits 1
-instead of doing anything — never an unhandled traceback.
+All subcommands are implemented.
 """
 from __future__ import annotations
 
@@ -11,14 +8,12 @@ import argparse
 import datetime as _dt
 import json as _json
 import os
-import platform
-import shutil
 import signal
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
-from . import clipboard, pidfile, storage
+from . import clipboard, doctor, pidfile, storage
 from .collectors import window as window_collector
 from .config import ConfigError, config_path, default_config, load_config, save_config
 from .paths import db_path
@@ -51,91 +46,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _check(label: str, ok: bool, detail: str = "") -> bool:
-    mark = "PASS" if ok else "FAIL"
-    line = f"[{mark}] {label}"
-    if detail:
-        line += f" — {detail}"
-    print(line)
-    return ok
-
-
-def _doctor_windows(results: list[bool]) -> None:
-    try:
-        import ctypes
-
-        ctypes.windll.user32  # noqa: B018 — attribute access is the check
-        results.append(_check("Windows window-tracking API (user32/kernel32 via ctypes)", True))
-    except Exception as exc:
-        results.append(
-            _check("Windows window-tracking API (user32/kernel32 via ctypes)", False, str(exc))
-        )
-
-
-def _doctor_linux(results: list[bool]) -> None:
-    warning = window_collector.wayland_warning()
-    if warning:
-        results.append(_check("Display server", False, warning))
-    else:
-        session_type = os.environ.get("XDG_SESSION_TYPE", "")
-        results.append(_check("Display server", True, session_type or "X11 (assumed)"))
-
-    has_xdotool = shutil.which("xdotool") is not None
-    has_xprop = shutil.which("xprop") is not None
-    results.append(
-        _check(
-            "xdotool or xprop available (active window title)",
-            has_xdotool or has_xprop,
-            "xdotool found" if has_xdotool else ("xprop found" if has_xprop else "install one of: xdotool, xprop"),
-        )
-    )
-
-    has_xprintidle = shutil.which("xprintidle") is not None
-    _check(
-        "xprintidle available (optional; falls back to X11 screensaver extension)",
-        has_xprintidle,
-        "" if has_xprintidle else "not found — will use the ctypes/X11 fallback instead",
-    )
-
-
 def cmd_doctor(args: argparse.Namespace) -> int:
-    results: list[bool] = []
-
-    py_ok = sys.version_info >= (3, 9)
-    results.append(_check("Python >= 3.9", py_ok, f"found {platform.python_version()}"))
-
-    git_path = shutil.which("git")
-    results.append(_check("git executable on PATH", git_path is not None, git_path or "not found — install git"))
-
-    system = platform.system()
-    if system == "Windows":
-        _doctor_windows(results)
-    elif system == "Linux":
-        _doctor_linux(results)
-    else:
-        results.append(
-            _check(
-                f"Platform '{system}' window-tracking",
-                False,
-                "unsupported — only Windows and Linux/X11 are implemented",
-            )
-        )
-
-    try:
-        load_config()
-        results.append(_check("config.json valid", True, str(config_path())))
-    except ConfigError as exc:
-        results.append(_check("config.json valid", False, str(exc)))
-
-    try:
-        with storage.open_db() as conn:
-            conn.execute("SELECT 1")
-        results.append(_check("database writable", True, str(db_path())))
-    except Exception as exc:
-        results.append(_check("database writable", False, str(exc)))
+    results = doctor.run_checks()
+    for r in results:
+        mark = "PASS" if r["ok"] else "FAIL"
+        line = f"[{mark}] {r['label']}"
+        if r["detail"]:
+            line += f" — {r['detail']}"
+        print(line)
 
     print()
-    all_ok = all(results)
+    all_ok = doctor.all_required_ok(results)
     print("All checks passed." if all_ok else "Some checks failed — see FAIL lines above.")
     return 0 if all_ok else 1
 
@@ -156,16 +77,23 @@ def cmd_track(args: argparse.Namespace) -> int:
     if warning:
         print(f"Warning: {warning}")
 
-    pidfile.write_pidfile()
     stop_requested = False
 
     def _request_stop(signum, frame):
         nonlocal stop_requested
         stop_requested = True
 
+    # Register handlers *before* writing the pidfile: a signal arriving in
+    # the gap between the two would otherwise get Python's default
+    # SIGINT/SIGTERM handling (an immediate, ungraceful exit that skips the
+    # try/finally below and leaves the pidfile behind).
     signal.signal(signal.SIGINT, _request_stop)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _request_stop)
+    if hasattr(signal, "SIGBREAK"):  # Windows: raised by CTRL_BREAK_EVENT,
+        signal.signal(signal.SIGBREAK, _request_stop)  # used by tracker_process.stop_tracker()
+
+    pidfile.write_pidfile()
 
     print(f"Tracking started (pid {os.getpid()}, polling every {cfg.tracking.poll_interval_seconds}s).")
     print("Press Ctrl+C to stop.")
@@ -213,7 +141,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             existing = storage.get_day_summary(conn, day)
             if existing and existing.status == "submitted":
                 print(f"{day} is already submitted — its summary is frozen.")
-                print("Reopen it first (via the web UI/API in a later phase) to regenerate.")
+                print("Reopen it first (daylog ui, or POST /api/days/{date}/reopen) to regenerate.")
                 return 1
             if existing and storage.has_unsaved_edits(conn, day):
                 print(f"Note: {day} has hand-edited text that differs from the last generated draft.")
@@ -221,7 +149,11 @@ def cmd_report(args: argparse.Namespace) -> int:
 
             report = report_builder.generate_report(cfg, conn, day)
             markdown = report_render.render_markdown(report)
-            storage.save_generated_summary(conn, day, markdown)
+            # Only the timesheet-paste-ready bullets are persisted as
+            # generated_md — render_markdown()'s full multi-section report
+            # (printed/--out below) isn't something you'd paste into an
+            # office form, so it's never what the editable summary holds.
+            storage.save_generated_summary(conn, day, report_render.render_draft_text(report))
     except StorageError as exc:
         print(f"Could not generate report: {exc}")
         return 1
@@ -241,8 +173,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"\nWrote report to {args.out}")
 
     if args.copy:
-        draft_text = "\n".join(f"- {line}" for line in report.draft_lines)
-        ok, error = clipboard.copy_to_clipboard(draft_text)
+        ok, error = clipboard.copy_to_clipboard(report_render.render_draft_text(report))
         if ok:
             print("\nTimesheet draft copied to clipboard.")
         else:
@@ -251,13 +182,33 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
-def _not_implemented(name: str, phase: str) -> Callable[[argparse.Namespace], int]:
-    def _cmd(args: argparse.Namespace) -> int:
-        print(f"'daylog {name}' isn't implemented yet — it lands in {phase}.")
-        print("Run 'daylog doctor' to check your setup in the meantime.")
+def cmd_ui(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        print(f"Cannot start the web UI: {exc}")
         return 1
 
-    return _cmd
+    import uvicorn
+
+    from .server.app import app as fastapi_app
+
+    url = f"http://{cfg.server.host}:{cfg.server.port}/"
+    print(f"Starting daylog UI at {url}")
+    print("Press Ctrl+C to stop.")
+
+    if not args.no_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    try:
+        uvicorn.run(fastapi_app, host=cfg.server.host, port=cfg.server.port, log_level="warning")
+    except OSError as exc:
+        print(f"Could not start the server: {exc}")
+        return 1
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -287,7 +238,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.set_defaults(func=cmd_status)
 
     p_ui = sub.add_parser("ui", help="Start the local web UI and open it in a browser.")
-    p_ui.set_defaults(func=_not_implemented("ui", "Phase 7"))
+    p_ui.add_argument("--no-browser", action="store_true", help="Don't automatically open a browser window")
+    p_ui.set_defaults(func=cmd_ui)
 
     return parser
 

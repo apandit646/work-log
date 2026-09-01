@@ -86,9 +86,19 @@ class Tracker:
         self._open = _OpenBlock(block_id, sample.app, sample.title, day)
 
     def run_forever(self, stop: Callable[[], bool] = lambda: False) -> None:
+        """Polls every poll_interval_seconds until `stop()` returns True.
+
+        Sleeps in short increments rather than one time.sleep(interval)
+        call: per PEP 475, a signal handler doesn't cut a sleep short — it
+        just re-sleeps for whatever's left — so a single long sleep would
+        make Ctrl+C (or the web UI's Stop tracker button) take a full
+        poll interval to actually respond, up to 5+ seconds by default.
+        """
         interval = self._config.tracking.poll_interval_seconds
+        check_interval = min(interval, 0.5)
         while not stop():
             self.poll_once()
-            if stop():
-                break
-            time.sleep(interval)
+            elapsed = 0.0
+            while elapsed < interval and not stop():
+                time.sleep(min(check_interval, interval - elapsed))
+                elapsed += check_interval

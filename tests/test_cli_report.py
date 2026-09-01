@@ -24,7 +24,23 @@ def _seed_activity(day):
         )
 
 
-def test_report_prints_markdown_and_persists_generated_summary(daylog_home, capsys):
+def _mock_one_commit(monkeypatch, day):
+    """cmd_report always calls refresh_day(), which re-runs the real git
+    collector and would wipe any commits_cache row we pre-seeded by hand
+    (git is "available", just finds nothing at the configured — empty —
+    scan_paths). Mocking the collector is what makes a seeded commit
+    actually survive through to the persisted draft."""
+    from daylog.collectors.git import Commit, GitCollection, RepoResult
+
+    commit = Commit(
+        repo="proj", hash="abc1234567", subject="add retry logic", branch="main",
+        timestamp=f"{day}T09:30:00+00:00", additions=5, deletions=1,
+    )
+    result = GitCollection(available=True, repos=[RepoResult(name="proj", path="/tmp/proj", commits=[commit])])
+    monkeypatch.setattr("daylog.report.builder.git_collector.collect", lambda config, day: result)
+
+
+def test_report_prints_the_full_markdown_report(daylog_home, capsys):
     _init_with_no_collectors(daylog_home)
     day = "2026-09-01"
     _seed_activity(day)
@@ -36,10 +52,26 @@ def test_report_prints_markdown_and_persists_generated_summary(daylog_home, caps
     assert f"# Daylog — {day}" in out
     assert "Coding" in out
 
+
+def test_report_persists_only_the_draft_bullets_not_the_full_report(daylog_home, capsys, monkeypatch):
+    # generated_md is what the summary textarea in the web UI holds and
+    # what gets pasted into the office form — it must be just the plain-
+    # language draft bullets, not the whole multi-section Markdown report
+    # (headers, bar chart, commit lists) that gets printed/--out instead.
+    _init_with_no_collectors(daylog_home)
+    day = "2026-09-01"
+    _seed_activity(day)
+    _mock_one_commit(monkeypatch, day)
+
+    exit_code = main(["report", "--date", day])
+    assert exit_code == 0
+    capsys.readouterr()
+
     with storage.open_db() as conn:
         summary = storage.get_day_summary(conn, day)
     assert summary is not None
-    assert f"# Daylog — {day}" in summary.generated_md
+    assert summary.generated_md == "- Added retry logic in proj."
+    assert "# Daylog" not in summary.generated_md
     assert summary.edited_md is None
 
 

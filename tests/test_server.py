@@ -117,13 +117,37 @@ def test_get_day_returns_full_report_shape(client):
     assert data["timeline"][0]["category"] == "Coding"
 
 
+def test_get_day_includes_persisted_summary_text(client):
+    day = "2026-09-01"
+    with storage.open_db() as conn:
+        storage.save_generated_summary(conn, day, "- generated text")
+        storage.save_edited_summary(conn, day, "- my edit")
+
+    resp = client.get(f"/api/days/{day}")
+    data = resp.json()
+    assert data["generated_md"] == "- generated text"
+    assert data["edited_md"] == "- my edit"
+    assert data["current_text"] == "- my edit"
+
+
+def test_get_day_summary_fields_are_null_with_no_summary_yet(client):
+    resp = client.get("/api/days/2026-09-01")
+    data = resp.json()
+    assert data["generated_md"] is None
+    assert data["edited_md"] is None
+    assert data["current_text"] is None
+
+
 # --- POST /api/days/{day}/regenerate --------------------------------------
 
 
 def test_regenerate_runs_collectors_and_saves_generated_md(client):
     resp = client.post("/api/days/2026-09-01/regenerate")
     assert resp.status_code == 200
-    assert resp.json()["had_unsaved_edits"] is False
+    data = resp.json()
+    assert data["had_unsaved_edits"] is False
+    assert data["generated_md"] is not None
+    assert data["current_text"] == data["generated_md"]
 
     with storage.open_db() as conn:
         summary = storage.get_day_summary(conn, "2026-09-01")
@@ -217,3 +241,48 @@ def test_submit_with_no_summary_yet_returns_409(client):
 def test_reopen_nonexistent_day_returns_409(client):
     resp = client.post("/api/days/2026-09-01/reopen")
     assert resp.status_code == 409
+
+
+# --- GET /api/doctor -------------------------------------------------------
+
+
+def test_get_doctor_returns_the_same_checks_as_the_cli(client):
+    resp = client.get("/api/doctor")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "checks" in data and "all_ok" in data
+    labels = {c["label"] for c in data["checks"]}
+    assert "Python >= 3.9" in labels
+    assert "config.json valid" in labels
+
+
+# --- POST /api/tracker/start, /api/tracker/stop ---------------------------
+
+
+def test_tracker_start_and_stop_round_trip(client):
+    resp = client.get("/api/status")
+    assert resp.json()["tracker_running"] is False
+
+    resp = client.post("/api/tracker/start")
+    assert resp.status_code == 200
+    pid = resp.json()["pid"]
+    assert pid is not None
+
+    import time
+
+    for _ in range(100):
+        if client.get("/api/status").json()["tracker_running"]:
+            break
+        time.sleep(0.05)
+    assert client.get("/api/status").json()["tracker_running"] is True
+
+    resp = client.post("/api/tracker/stop")
+    assert resp.status_code == 200
+    assert resp.json()["stopped"] is True
+    assert client.get("/api/status").json()["tracker_running"] is False
+
+
+def test_tracker_stop_when_not_running_is_a_noop(client):
+    resp = client.post("/api/tracker/stop")
+    assert resp.status_code == 200
+    assert resp.json()["stopped"] is True

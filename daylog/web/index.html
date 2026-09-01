@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>daylog</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">daylog</div>
+  <nav>
+    <button class="nav-btn" data-view="today">Today</button>
+    <button class="nav-btn" data-view="history">History</button>
+    <button class="nav-btn" data-view="settings">Settings</button>
+  </nav>
+</header>
+
+<main>
+
+  <section id="view-today" class="view">
+    <div class="date-header">
+      <button id="prev-day" class="icon-btn" aria-label="Previous day">&larr;</button>
+      <h1 id="current-date">&nbsp;</h1>
+      <button id="next-day" class="icon-btn" aria-label="Next day">&rarr;</button>
+      <span id="status-badge" class="badge"></span>
+    </div>
+
+    <div class="metrics">
+      <div class="metric-card">
+        <div class="metric-value" id="metric-total">&ndash;</div>
+        <div class="metric-label">Time at machine</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value" id="metric-coding">&ndash;</div>
+        <div class="metric-label">Coding time</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value" id="metric-commits">&ndash;</div>
+        <div class="metric-label">Commits</div>
+      </div>
+    </div>
+
+    <div class="card timeline-card">
+      <div id="timeline-bar" class="timeline-bar"></div>
+      <div id="timeline-legend" class="timeline-legend"></div>
+    </div>
+    <div id="timeline-tooltip" class="timeline-tooltip" hidden></div>
+
+    <div class="panels">
+      <div class="card panel">
+        <h2>Meetings</h2>
+        <div id="meetings-list" class="panel-body"></div>
+      </div>
+      <div class="card panel">
+        <h2>Commits</h2>
+        <div id="commits-list" class="panel-body"></div>
+        <h3>Uncommitted</h3>
+        <div id="wip-list" class="panel-body"></div>
+      </div>
+    </div>
+
+    <div class="card summary-box">
+      <div class="summary-header">
+        <h2>Draft for the timesheet</h2>
+        <span id="save-indicator" class="save-indicator"></span>
+      </div>
+      <textarea id="summary-text" rows="8" placeholder="Nothing generated yet — click Regenerate."></textarea>
+      <div class="summary-footer">
+        <span id="last-edited" class="hint"></span>
+        <div class="summary-actions">
+          <button id="btn-regenerate">Regenerate</button>
+          <button id="btn-copy">Copy</button>
+          <button id="btn-submit">Mark submitted</button>
+          <button id="btn-reopen" hidden>Reopen</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-history" class="view">
+    <h1>History</h1>
+    <table class="data-table">
+      <thead>
+        <tr><th>Date</th><th>Total time</th><th>Commits</th><th>Status</th></tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </section>
+
+  <section id="view-settings" class="view">
+    <h1>Settings</h1>
+
+    <div class="card settings-block">
+      <h2>Tracker</h2>
+      <p>Status: <strong id="tracker-status">unknown</strong></p>
+      <div class="settings-actions">
+        <button id="btn-tracker-start">Start</button>
+        <button id="btn-tracker-stop">Stop</button>
+      </div>
+    </div>
+
+    <div class="card settings-block">
+      <h2>Repo paths</h2>
+      <p class="hint">One path per line — folders daylog scans for git repos.</p>
+      <textarea id="settings-scan-paths" rows="4"></textarea>
+    </div>
+
+    <div class="card settings-block">
+      <h2>Calendar URLs</h2>
+      <p class="hint">One private iCal URL per line (Outlook or Google Calendar).</p>
+      <textarea id="settings-ics-urls" rows="3"></textarea>
+    </div>
+
+    <div class="card settings-block">
+      <h2>Category keywords</h2>
+      <p class="hint">Matched against the app name and window title, first match wins.</p>
+      <div id="settings-categories"></div>
+    </div>
+
+    <div class="settings-actions">
+      <button id="btn-save-settings">Save settings</button>
+      <span id="settings-save-indicator" class="save-indicator"></span>
+    </div>
+
+    <div class="card settings-block">
+      <h2>Doctor</h2>
+      <button id="btn-run-doctor">Run doctor</button>
+      <div id="doctor-results"></div>
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

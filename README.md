@@ -8,11 +8,11 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phases 1–6 (skeleton/storage, window tracking,
-git collector, calendar collector, report generation, JSON API) are
-done.** The web UI and packaging/autostart land in later phases.
+This is a phased build. **Phases 1–7 (skeleton/storage, window tracking,
+git collector, calendar collector, report generation, JSON API, web UI)
+are done.** Packaging/autostart and the tray icon land in Phase 8.
 
-## Status: Phase 6
+## Status: Phase 7
 
 What exists right now:
 
@@ -27,9 +27,10 @@ What exists right now:
   running (tracked via a pidfile at `~/.daylog/tracker.pid`).
 - `daylog status` — reports whether the tracker is running and when it
   last recorded a sample.
-- `daylog report` / `ui` exist as real subcommands (so `--help` shows the
-  full planned shape of the tool) but currently just print which phase
-  implements them.
+- `daylog report [--date] [--copy] [--out] [--json]` — generates the full
+  report and persists the timesheet draft.
+- `daylog ui [--no-browser]` — starts the local web UI (see below) and
+  opens it in a browser.
 - `daylog.collectors.git` — discovers repos under `git.scan_paths`,
   collects today's commits (across all local branches, deduplicated,
   filtered to your identity) with lines added/removed, and lists
@@ -37,11 +38,14 @@ What exists right now:
 - `daylog report [--date YYYY-MM-DD] [--copy] [--out FILE] [--json]` —
   generates the full Markdown report (time by category with a text bar
   chart, meetings, commits by repo, work in progress, top windows, and
-  the "Draft for the timesheet" block), prints it, and saves it as that
-  day's `generated_md`. `--copy` copies just the timesheet draft bullets
-  to the clipboard (via `clip` on Windows, `xclip`/`xsel` on Linux — no
-  new dependency); `--out FILE` also writes the Markdown to a file;
-  `--json` prints the same data as JSON instead. Refuses to touch an
+  the "Draft for the timesheet" block) and prints it. Only the timesheet
+  draft bullets themselves — not the whole report — are persisted as
+  that day's `generated_md`; that's the text the web UI's summary box
+  and `--copy` both use, since it's the only part meant to be pasted
+  into an office form. `--copy` copies it to the clipboard (via `clip`
+  on Windows, `xclip`/`xsel` on Linux — no new dependency); `--out FILE`
+  writes the full Markdown report to a file; `--json` prints the same
+  data as JSON instead. Refuses to touch an
   already-submitted day; warns (without blocking or discarding) if
   you've hand-edited that day's summary since it was last generated.
 
@@ -227,21 +231,29 @@ EOF
 - Declined events are skipped: a Google-style `STATUS:CANCELLED` export
   is always honored; if `calendar.owner_email` is set, your own
   `ATTENDEE`/`PARTSTAT=DECLINED` is checked too.
+
 ## How report generation works
 
-- `daylog report` always re-collects git and calendar data for the
-  requested day and replaces that day's cached commits/meetings — this
-  is "generate", and generating always reflects the *current* state of
-  your repos and calendar, not a frozen snapshot. If a collector
+- "Generating" a day (`daylog report`, or the JSON API's `POST .../
+  regenerate`) always re-collects git and calendar data for that day and
+  replaces its cached commits/meetings — it reflects the *current* state
+  of your repos and calendar, not a frozen snapshot. If a collector
   genuinely fails (git missing, calendar unreachable), the previous
   cache for that day is left untouched rather than wiped by an empty
   result — but if it *succeeds* and finds nothing (e.g. a repo was
-  deleted from disk), the day's cache legitimately reflects that. A
-  true point-in-time view that never re-collects — the mechanism that
-  keeps an old day rendering correctly forever — is `daylog.report.
-  builder.load_report()`, which the JSON API's `GET` endpoints will use
-  starting in Phase 6; the CLI doesn't expose a separate "view without
-  regenerating" command yet.
+  deleted from disk), the day's cache legitimately reflects that. A true
+  point-in-time view that never re-collects — the mechanism that keeps
+  an old day rendering correctly forever — is `daylog.report.builder.
+  load_report()`, which the JSON API's `GET` endpoints and the web UI's
+  History view use; only explicitly clicking Regenerate (or running
+  `daylog report`) re-collects.
+- Only the **draft bullets** — not the full multi-section report — are
+  persisted as `day_summaries.generated_md`. That's the text the web
+  UI's summary box holds and edits, and what `--copy`/the UI's Copy
+  button put on the clipboard, because it's the only part meant to be
+  pasted into an office form; the full report (category bar chart,
+  meeting list, commit list, ...) is regenerated fresh for display every
+  time, never stored.
 - **The timesheet draft** (`report/draft.py`) is a mechanical, rule-based
   rewrite, not an LLM: it strips conventional-commit prefixes
   (`fix: …`), maps a small set of known leading verbs to past tense
@@ -262,8 +274,8 @@ EOF
 
 ## The JSON API
 
-Not started automatically yet — `daylog ui` (Phase 7) is what will run
-it — but you can try it now:
+Started by `daylog ui` (see below) alongside the web UI, or run it on its
+own:
 
 ```bash
 python3 -c "import uvicorn; from daylog.server.app import app; uvicorn.run(app, host='127.0.0.1', port=8765)"
@@ -277,19 +289,53 @@ and calls those.
 
 | Endpoint | Behavior |
 |---|---|
-| `GET /api/days?limit=30` | Per-day overview (status, total tracked minutes, commit count) for the most recent days with any footprint. `status` is `null` for a day that's been tracked but never reported. |
-| `GET /api/days/{date}` | The full report as JSON — same shape as `daylog report --json`. Read-only: never touches git/calendar/network. A date with no data returns an empty report, not an error. |
+| `GET /api/days?limit=30` | Per-day overview (status, total tracked minutes, commit count) for the most recent days with any footprint. `status` is `null` for a day that's been tracked but never reported (the web UI's History view shows that as "Missed"). |
+| `GET /api/days/{date}` | The full report as JSON, plus the persisted summary fields (`generated_md`, `edited_md`, `current_text`, `submitted_at`, `updated_at`). Read-only: never touches git/calendar/network. A date with no data returns an empty report, not an error. |
 | `POST /api/days/{date}/regenerate` | Re-runs the collectors and replaces that day's cache (same semantics as `daylog report`). Blocked (`409`) on a submitted day. Response includes `had_unsaved_edits: bool` — edited text is never destroyed, but this tells the caller it's now stale. |
 | `PUT /api/days/{date}/summary` | Body `{"edited_md": "..."}`. Saves hand-edited text. Blocked (`409`) on a submitted day. |
 | `POST /api/days/{date}/submit` | Marks the day submitted (`409` if there's no summary yet). |
 | `POST /api/days/{date}/reopen` | Undoes submit. |
 | `GET /api/status` | `{tracker_running, tracker_pid, last_sample_at}`. |
 | `GET /api/config` / `PUT /api/config` | Read/replace the full config as JSON — same validation as `config.json` on disk (rejects a non-local `server.host`, etc). |
+| `GET /api/doctor` | The same checks as `daylog doctor`, as `{checks: [...], all_ok}` — one implementation behind both. |
+| `POST /api/tracker/start` / `POST /api/tracker/stop` | Starts/stops `daylog track` as a detached background process (`daylog.tracker_process`), for the Settings screen's Start/Stop buttons. |
 
 `GET /api/days/{date}`'s `timeline` array carries `{start, end, category,
 app, title}` per block — `app`/`title` beyond the minimum so the web
-UI's timeline hover (Phase 7) can show what was actually open, without a
-second request.
+UI's timeline hover can show what was actually open, without a second
+request.
+
+## The web UI
+
+```bash
+daylog ui              # starts the server and opens your browser
+daylog ui --no-browser # just starts the server, e.g. for scripting
+```
+
+Plain HTML/CSS/JS (`daylog/web/`) — no framework, no npm, no build step;
+served as static files by the same FastAPI app as the JSON API, at `/`.
+Three screens, switched client-side (`app.js`):
+
+- **Today** — date navigation, a status badge, three metric cards, a
+  stacked timeline bar (hover a segment for app + time range), meetings
+  and commits/WIP side by side, and the summary box. The summary
+  textarea holds `current_text` (your edit if there is one, else the
+  generated draft) and autosaves 2 seconds after you stop typing; every
+  keystroke is also mirrored into `localStorage` immediately, so a
+  refresh before the autosave fires never loses what you typed — reload
+  the page and the unsaved text (and a pending-save indicator) comes
+  right back. Regenerate/Copy/Mark submitted mirror the CLI; Copy uses
+  the browser's clipboard API directly (no platform tool needed, unlike
+  the CLI's `--copy`).
+- **History** — `GET /api/days`, a row per day, click to jump to that
+  day in Today. A day with no summary shows **Missed** in red.
+- **Settings** — edit `git.scan_paths`/`calendar.ics_urls`/categories
+  and save back to `config.json` via `PUT /api/config`; Start/Stop the
+  tracker; Run doctor shows the same pass/fail list as the CLI.
+
+Light and dark mode both work (`prefers-color-scheme`, no toggle needed)
+via CSS custom properties in `style.css` — no CSS framework, and it's
+kept under 400 lines.
 
 ## Design notes for later phases
 

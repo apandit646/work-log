@@ -180,5 +180,44 @@ def test_run_forever_stops_when_requested(conn, monkeypatch):
         return calls["n"] > 3
 
     tracker.run_forever(stop=stop)
-    assert calls["n"] == 4
+    # The exact call count is an implementation detail (run_forever checks
+    # stop() repeatedly in short increments so it responds promptly — see
+    # its docstring); what matters is it actually stopped, and poll_once()
+    # ran (exactly once, since one unchanging sample only ever extends the
+    # same block regardless of how many times it's polled).
+    assert calls["n"] >= 4
     assert len(storage.get_activity_blocks(conn, "2026-09-01")) == 1
+
+
+def test_run_forever_responds_promptly_even_with_a_long_poll_interval(conn, monkeypatch):
+    """Regression test for the PEP-475 sleep-doesn't-shorten issue: a
+    single time.sleep(interval) would make stop() take a full poll
+    interval to take effect. Using the real clock (no mocking) with a
+    5-minute interval and a stop flag set from another thread proves the
+    loop actually exits promptly instead of sleeping the full interval."""
+    import threading
+    import time as real_time
+
+    fx = _Inputs()
+    fx.now = dt.datetime(2026, 9, 1, 9, 0, 0, tzinfo=dt.timezone.utc)
+    fx.sample = WindowSample("Code", "editing")
+    cfg = default_config()
+    cfg.tracking.poll_interval_seconds = 300  # 5 minutes
+    tracker = _make_tracker(conn, fx, cfg)
+
+    stop_flag = {"stop": False}
+
+    def stop():
+        return stop_flag["stop"]
+
+    def flip_stop_soon():
+        real_time.sleep(0.3)
+        stop_flag["stop"] = True
+
+    threading.Thread(target=flip_stop_soon).start()
+
+    start = real_time.time()
+    tracker.run_forever(stop=stop)
+    elapsed = real_time.time() - start
+
+    assert elapsed < 2.0  # nowhere near the 300s interval

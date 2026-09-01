@@ -124,6 +124,15 @@ def render_markdown(report: Report) -> str:
     return "\n".join(lines)
 
 
+def render_draft_text(report: Report) -> str:
+    """Just the "Draft for the timesheet" bullets, as plain Markdown list
+    text — this is what actually gets pasted into an office form, and
+    what day_summaries.generated_md stores (not the full multi-section
+    report, which render_markdown() produces for on-screen/--out display
+    only). Empty string if there's no evidence-backed work to report."""
+    return "\n".join(f"- {line}" for line in report.draft_lines)
+
+
 def render_json(report: Report) -> Dict[str, Any]:
     return {
         "day": report.day,

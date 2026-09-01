@@ -63,11 +63,13 @@ def test_doctor_runs_after_init(daylog_home, capsys):
     assert exit_code in (0, 1)  # environment-dependent (e.g. missing xdotool in CI)
 
 
-def test_unimplemented_subcommands_exit_cleanly(daylog_home, capsys):
+def test_ui_without_config_gives_a_clear_error(daylog_home, capsys):
+    # Exercises only the early config-check path — daylog ui otherwise
+    # blocks forever in uvicorn.run(), which is covered by a real
+    # subprocess test instead (see test_cli_ui.py).
     exit_code = main(["ui"])
     assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "isn't implemented yet" in out
+    assert "daylog init" in capsys.readouterr().out
 
 
 def test_status_before_anything_has_run(daylog_home, capsys):

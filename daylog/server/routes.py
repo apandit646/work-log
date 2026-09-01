@@ -14,7 +14,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
-from .. import pidfile, storage
+from .. import doctor, pidfile, storage, tracker_process
 from ..config import ConfigError, config_from_dict, config_to_dict, load_config, save_config
 from ..report import builder as report_builder
 from ..report import render as report_render
@@ -49,6 +49,24 @@ def get_status() -> Dict[str, Any]:
     return {"tracker_running": running, "tracker_pid": pid, "last_sample_at": last_sample}
 
 
+@router.get("/doctor")
+def get_doctor() -> Dict[str, Any]:
+    results = doctor.run_checks()
+    return {"checks": results, "all_ok": doctor.all_required_ok(results)}
+
+
+@router.post("/tracker/start")
+def start_tracker() -> Dict[str, Any]:
+    pid = tracker_process.start_tracker()
+    return {"pid": pid}
+
+
+@router.post("/tracker/stop")
+def stop_tracker() -> Dict[str, Any]:
+    stopped = tracker_process.stop_tracker()
+    return {"stopped": stopped}
+
+
 @router.get("/config")
 def get_config() -> Dict[str, Any]:
     return config_to_dict(_load_config_or_400())
@@ -71,12 +89,34 @@ def list_days(limit: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
     return {"days": days}
 
 
+def _summary_fields(conn, day: str) -> Dict[str, Any]:
+    """generated_md/edited_md/current_text/submitted_at/updated_at — the
+    persisted, editable-by-hand fields that live in day_summaries, not on
+    the freshly-aggregated Report. The web UI's summary textarea needs
+    both in one response, so GET/regenerate merge this in."""
+    summary = storage.get_day_summary(conn, day)
+    if summary is None:
+        return {
+            "generated_md": None, "edited_md": None, "current_text": None,
+            "submitted_at": None, "updated_at": None,
+        }
+    return {
+        "generated_md": summary.generated_md,
+        "edited_md": summary.edited_md,
+        "current_text": summary.current_text,
+        "submitted_at": summary.submitted_at,
+        "updated_at": summary.updated_at,
+    }
+
+
 @router.get("/days/{day}")
 def get_day(day: str) -> Dict[str, Any]:
     day = _validate_day(day)
     with storage.open_db() as conn:
         report = report_builder.load_report(conn, day)
-    return report_render.render_json(report)
+        result = report_render.render_json(report)
+        result.update(_summary_fields(conn, day))
+    return result
 
 
 @router.post("/days/{day}/regenerate")
@@ -89,9 +129,11 @@ def regenerate_day(day: str) -> Dict[str, Any]:
             raise HTTPException(status_code=409, detail=f"{day} is already submitted; reopen it first")
         had_unsaved_edits = storage.has_unsaved_edits(conn, day)
         report = report_builder.generate_report(cfg, conn, day)
-        markdown = report_render.render_markdown(report)
-        storage.save_generated_summary(conn, day, markdown)
-    result = report_render.render_json(report)
+        # Only the timesheet-paste-ready bullets are persisted as
+        # generated_md — see render_draft_text()'s docstring.
+        storage.save_generated_summary(conn, day, report_render.render_draft_text(report))
+        result = report_render.render_json(report)
+        result.update(_summary_fields(conn, day))
     # Edits are never destroyed (generated_md and edited_md are separate
     # columns) — this just tells the client that stale edited text is now
     # sitting on top of freshly-regenerated data, so it can warn the user.
