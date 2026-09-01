@@ -65,6 +65,7 @@ class MeetingEvent:
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "calendar_source": self.calendar_source,
+            "all_day": self.all_day,
         }
 
 

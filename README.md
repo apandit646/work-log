@@ -8,11 +8,11 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phases 1–4 (skeleton/storage, window tracking,
-git collector, calendar collector) are done.** Report generation, the
-JSON API, and the web UI land in later phases.
+This is a phased build. **Phases 1–5 (skeleton/storage, window tracking,
+git collector, calendar collector, report generation) are done.** The
+JSON API and the web UI land in later phases.
 
-## Status: Phase 4
+## Status: Phase 5
 
 What exists right now:
 
@@ -33,9 +33,17 @@ What exists right now:
 - `daylog.collectors.git` — discovers repos under `git.scan_paths`,
   collects today's commits (across all local branches, deduplicated,
   filtered to your identity) with lines added/removed, and lists
-  uncommitted work in progress. Not wired into the CLI yet — that lands
-  with `daylog report` in Phase 5. See "How the git collector works"
-  below for how to try it directly.
+  uncommitted work in progress.
+- `daylog report [--date YYYY-MM-DD] [--copy] [--out FILE] [--json]` —
+  generates the full Markdown report (time by category with a text bar
+  chart, meetings, commits by repo, work in progress, top windows, and
+  the "Draft for the timesheet" block), prints it, and saves it as that
+  day's `generated_md`. `--copy` copies just the timesheet draft bullets
+  to the clipboard (via `clip` on Windows, `xclip`/`xsel` on Linux — no
+  new dependency); `--out FILE` also writes the Markdown to a file;
+  `--json` prints the same data as JSON instead. Refuses to touch an
+  already-submitted day; warns (without blocking or discarding) if
+  you've hand-edited that day's summary since it was last generated.
 
 ## Install (development)
 
@@ -176,8 +184,8 @@ defaults on next load.
   caught individually (`RepoResult.error`) so it doesn't take down the
   whole collection.
 
-Try it directly (this isn't wired into the CLI until `daylog report` in
-Phase 5):
+`daylog report` runs this automatically now, but you can also call the
+collector directly:
 
 ```bash
 python3 - <<'EOF'
@@ -219,8 +227,38 @@ EOF
 - Declined events are skipped: a Google-style `STATUS:CANCELLED` export
   is always honored; if `calendar.owner_email` is set, your own
   `ATTENDEE`/`PARTSTAT=DECLINED` is checked too.
-- Not wired into the CLI yet — that lands with `daylog report` in
-  Phase 5.
+## How report generation works
+
+- `daylog report` always re-collects git and calendar data for the
+  requested day and replaces that day's cached commits/meetings — this
+  is "generate", and generating always reflects the *current* state of
+  your repos and calendar, not a frozen snapshot. If a collector
+  genuinely fails (git missing, calendar unreachable), the previous
+  cache for that day is left untouched rather than wiped by an empty
+  result — but if it *succeeds* and finds nothing (e.g. a repo was
+  deleted from disk), the day's cache legitimately reflects that. A
+  true point-in-time view that never re-collects — the mechanism that
+  keeps an old day rendering correctly forever — is `daylog.report.
+  builder.load_report()`, which the JSON API's `GET` endpoints will use
+  starting in Phase 6; the CLI doesn't expose a separate "view without
+  regenerating" command yet.
+- **The timesheet draft** (`report/draft.py`) is a mechanical, rule-based
+  rewrite, not an LLM: it strips conventional-commit prefixes
+  (`fix: …`), maps a small set of known leading verbs to past tense
+  (fix → Fixed, add → Added, …), and translates a short list of common
+  technical jargon (null pointer → "a crash", race condition → "a timing
+  bug", …). It cannot infer domain-specific meaning like turning "the
+  parser" into "the invoice parser" — that needs real language
+  understanding, which is exactly what the optional Phase 9 LLM-polish
+  feature (off by default) is for. Multiple non-trivial commits in the
+  same repo are merged into one line; `wip`/`typo`/formatting/merge
+  commits are always excluded; meetings 15 minutes or under are excluded.
+  Every line traces back to a real commit or meeting — nothing is
+  invented.
+- Categorization (`daylog.categorize`) is keyword-matched against app
+  name + window title using `config.categories`, first match wins,
+  computed once per activity block at tracking time (Phase 2) rather
+  than at report time.
 
 ## Design notes for later phases
 

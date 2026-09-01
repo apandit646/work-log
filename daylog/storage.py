@@ -76,8 +76,24 @@ CREATE TABLE IF NOT EXISTS meetings_cache (
 );
 """
 
-SCHEMA_MIGRATIONS: list[tuple[int, str]] = [
+
+def _migration_2(conn: sqlite3.Connection) -> None:
+    """ALTER TABLE ADD COLUMN isn't naturally idempotent (it errors if the
+    column already exists), so — unlike the plain-SQL migrations above —
+    this one is a function that checks first. Distinguishes all-day
+    meetings from timed ones without a fragile "does this span midnight
+    to midnight" heuristic at render time."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(meetings_cache)")}
+    if "all_day" not in columns:
+        conn.execute("ALTER TABLE meetings_cache ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0")
+
+
+# Each entry is either a SQL string (must be idempotent: CREATE TABLE/INDEX
+# IF NOT EXISTS) or a callable(conn) for a migration that can't be made
+# idempotent that way, like an ALTER TABLE ADD COLUMN.
+SCHEMA_MIGRATIONS: "list[tuple[int, Any]]" = [
     (1, _MIGRATION_1),
+    (2, _migration_2),
 ]
 
 
@@ -121,10 +137,13 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
     current = row["version"] if row else 0
     has_row = row is not None
     applied: list[int] = []
-    for version, sql in SCHEMA_MIGRATIONS:
+    for version, migration in SCHEMA_MIGRATIONS:
         if version <= current:
             continue
-        conn.executescript(sql)
+        if callable(migration):
+            migration(conn)
+        else:
+            conn.executescript(migration)
         if has_row:
             conn.execute("UPDATE schema_version SET version = ?", (version,))
         else:
@@ -339,9 +358,9 @@ def get_wip(conn: sqlite3.Connection, day: str) -> list[dict[str, Any]]:
 def replace_meetings_cache(conn: sqlite3.Connection, day: str, meetings: list[dict[str, Any]]) -> None:
     conn.execute("DELETE FROM meetings_cache WHERE day = ?", (day,))
     conn.executemany(
-        "INSERT INTO meetings_cache (day, uid, title, start, end, calendar_source) "
-        "VALUES (:day, :uid, :title, :start, :end, :calendar_source)",
-        [{**m, "day": day} for m in meetings],
+        "INSERT INTO meetings_cache (day, uid, title, start, end, calendar_source, all_day) "
+        "VALUES (:day, :uid, :title, :start, :end, :calendar_source, :all_day)",
+        [{**m, "day": day, "all_day": int(m.get("all_day", False))} for m in meetings],
     )
 
 

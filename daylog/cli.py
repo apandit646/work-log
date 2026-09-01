@@ -1,25 +1,30 @@
 """argparse entry point: init, doctor, track, report, status, ui.
 
-init, doctor, track, and status are implemented. report and ui are wired
-up as real subcommands (so `daylog --help` and `daylog <cmd> --help`
-already show the full shape of the tool) but print a friendly "not
-implemented yet" message and exit 1 instead of doing anything — never an
-unhandled traceback.
+init, doctor, track, status, and report are implemented. ui is wired up
+as a real subcommand (so `daylog --help` already shows the full shape of
+the tool) but prints a friendly "not implemented yet" message and exits 1
+instead of doing anything — never an unhandled traceback.
 """
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
+import json as _json
 import os
 import platform
 import shutil
 import signal
 import sys
+from pathlib import Path
 from typing import Callable, Optional
 
-from . import pidfile, storage
+from . import clipboard, pidfile, storage
 from .collectors import window as window_collector
 from .config import ConfigError, config_path, default_config, load_config, save_config
 from .paths import db_path
+from .report import builder as report_builder
+from .report import render as report_render
+from .storage import StorageError
 from .tracker import Tracker
 
 
@@ -189,6 +194,63 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        print(f"Cannot generate report: {exc}")
+        return 1
+
+    day = args.date or _dt.date.today().isoformat()
+    try:
+        _dt.date.fromisoformat(day)
+    except ValueError:
+        print(f"Invalid --date {day!r}: expected YYYY-MM-DD")
+        return 1
+
+    try:
+        with storage.open_db() as conn:
+            existing = storage.get_day_summary(conn, day)
+            if existing and existing.status == "submitted":
+                print(f"{day} is already submitted — its summary is frozen.")
+                print("Reopen it first (via the web UI/API in a later phase) to regenerate.")
+                return 1
+            if existing and storage.has_unsaved_edits(conn, day):
+                print(f"Note: {day} has hand-edited text that differs from the last generated draft.")
+                print("Regenerating refreshes the data sections but will NOT touch your edited text.\n")
+
+            report = report_builder.generate_report(cfg, conn, day)
+            markdown = report_render.render_markdown(report)
+            storage.save_generated_summary(conn, day, markdown)
+    except StorageError as exc:
+        print(f"Could not generate report: {exc}")
+        return 1
+
+    if not report.git_available and report.git_error:
+        print(f"Warning: {report.git_error}", file=sys.stderr)
+    if not report.calendar_available and report.calendar_error:
+        print(f"Warning: {report.calendar_error}", file=sys.stderr)
+
+    if args.json:
+        print(_json.dumps(report_render.render_json(report), indent=2))
+    else:
+        print(markdown)
+
+    if args.out:
+        Path(args.out).write_text(markdown, encoding="utf-8")
+        print(f"\nWrote report to {args.out}")
+
+    if args.copy:
+        draft_text = "\n".join(f"- {line}" for line in report.draft_lines)
+        ok, error = clipboard.copy_to_clipboard(draft_text)
+        if ok:
+            print("\nTimesheet draft copied to clipboard.")
+        else:
+            print(f"\nCould not copy to clipboard: {error}")
+
+    return 0
+
+
 def _not_implemented(name: str, phase: str) -> Callable[[argparse.Namespace], int]:
     def _cmd(args: argparse.Namespace) -> int:
         print(f"'daylog {name}' isn't implemented yet — it lands in {phase}.")
@@ -219,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--copy", action="store_true", help="Copy the timesheet draft to the clipboard")
     p_report.add_argument("--out", help="Write the Markdown report to this file")
     p_report.add_argument("--json", action="store_true", help="Print the report as JSON instead of Markdown")
-    p_report.set_defaults(func=_not_implemented("report", "Phase 5"))
+    p_report.set_defaults(func=cmd_report)
 
     p_status = sub.add_parser("status", help="Show whether the tracker is running and when it last sampled.")
     p_status.set_defaults(func=cmd_status)

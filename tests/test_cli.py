@@ -64,11 +64,10 @@ def test_doctor_runs_after_init(daylog_home, capsys):
 
 
 def test_unimplemented_subcommands_exit_cleanly(daylog_home, capsys):
-    for args in (["report"], ["ui"]):
-        exit_code = main(args)
-        assert exit_code == 1
-        out = capsys.readouterr().out
-        assert "isn't implemented yet" in out
+    exit_code = main(["ui"])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "isn't implemented yet" in out
 
 
 def test_status_before_anything_has_run(daylog_home, capsys):

@@ -262,4 +262,4 @@ def test_meetings_to_cache_rows_shape(daylog_home, monkeypatch):
 
     rows = cal.meetings_to_cache_rows(result)
     assert len(rows) == 1
-    assert set(rows[0].keys()) == {"uid", "title", "start", "end", "calendar_source"}
+    assert set(rows[0].keys()) == {"uid", "title", "start", "end", "calendar_source", "all_day"}
