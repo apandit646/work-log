@@ -28,8 +28,12 @@ def _empty_report(**overrides):
         git_error=None,
         calendar_available=True,
         calendar_error=None,
+        llm_used=False,
+        llm_error=None,
     )
     base.update(overrides)
+    if "draft_text" not in base:
+        base["draft_text"] = "\n".join(f"- {line}" for line in base["draft_lines"])
     return Report(**base)
 
 

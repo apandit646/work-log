@@ -12,6 +12,7 @@
   <div class="brand">daylog</div>
   <nav>
     <button class="nav-btn" data-view="today">Today</button>
+    <button class="nav-btn" data-view="week">Week</button>
     <button class="nav-btn" data-view="history">History</button>
     <button class="nav-btn" data-view="settings">Settings</button>
   </nav>
@@ -64,6 +65,7 @@
     <div class="card summary-box">
       <div class="summary-header">
         <h2>Draft for the timesheet</h2>
+        <span id="llm-indicator" class="llm-indicator" hidden></span>
         <span id="save-indicator" class="save-indicator"></span>
       </div>
       <textarea id="summary-text" rows="8" placeholder="Nothing generated yet — click Regenerate."></textarea>
@@ -76,6 +78,33 @@
           <button id="btn-reopen" hidden>Reopen</button>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="view-week" class="view">
+    <div class="date-header">
+      <h1 id="week-range">This week</h1>
+    </div>
+
+    <div class="metrics">
+      <div class="metric-card">
+        <div class="metric-value" id="week-total">&ndash;</div>
+        <div class="metric-label">Time at machine</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value" id="week-commits">&ndash;</div>
+        <div class="metric-label">Commits</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>By day</h2>
+      <div id="week-days" class="week-days"></div>
+    </div>
+
+    <div class="card">
+      <h2>By category</h2>
+      <div id="week-categories" class="timeline-legend"></div>
     </div>
   </section>
 
@@ -117,6 +146,22 @@
       <h2>Category keywords</h2>
       <p class="hint">Matched against the app name and window title, first match wins.</p>
       <div id="settings-categories"></div>
+    </div>
+
+    <div class="card settings-block">
+      <h2>LLM draft polishing (optional)</h2>
+      <p class="hint">
+        Rewrites the timesheet draft with Claude for more natural phrasing.
+        Off by default; reads <code>ANTHROPIC_API_KEY</code> from the
+        environment daylog was started in — never stored here. Falls back
+        to the plain draft automatically if the key is missing or the
+        call fails.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" id="settings-llm-enabled">
+        Enable LLM polishing
+      </label>
+      <input type="text" id="settings-llm-model" placeholder="claude-opus-5">
     </div>
 
     <div class="settings-actions">

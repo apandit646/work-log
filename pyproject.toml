@@ -19,10 +19,11 @@ readme = "README.md"
 #   fastapi        (Phase 6) — JSON API server for the web UI.
 #   uvicorn        (Phase 6) — ASGI server to run the FastAPI app.
 #
-# pystray/Pillow (Phase 8, system tray icon) are deliberately NOT core
-# dependencies — see [project.optional-dependencies].tray below — because
-# "make the tool work fully without it" means `pip install daylog` must
-# not require a working tray/notification-area stack at all.
+# pystray/Pillow (Phase 8, system tray icon) and anthropic (Phase 9,
+# optional LLM draft polishing) are deliberately NOT core dependencies —
+# see [project.optional-dependencies] below — because "make the tool work
+# fully without it" means `pip install daylog` must not require a working
+# tray/notification-area stack, nor an Anthropic API key, at all.
 dependencies = [
     "icalendar>=5.0",
     "python-dateutil>=2.8",
@@ -31,10 +32,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Test tooling only — never installed for end users of the CLI.
+# Test tooling only — never installed for end users of the CLI. anthropic
+# is here (not just under `llm`) so llm.py's success/error-handling paths
+# have real SDK exception classes to test against, with every network
+# call mocked — tests never make a real API call or need a real key.
 dev = [
     "pytest>=7.0",
     "httpx2>=2.0",  # required by fastapi.testclient.TestClient (starlette's HTTP client dependency)
+    "anthropic>=0.40",
 ]
 # `pip install daylog[tray]` / `pipx install ".[tray]"` — 'daylog tray'
 # prints a clear "install the tray extra" message and exits 1 without this;
@@ -42,6 +47,13 @@ dev = [
 tray = [
     "pystray>=0.19",
     "Pillow>=9.0",  # pystray's own icon-image backend
+]
+# `pip install daylog[llm]` — enables config.llm.enabled (off by default).
+# Without this, 'daylog report'/'daylog ui' work exactly as before;
+# polish_draft() just reports "package not installed" and the plain
+# rule-based draft is used, same as any other polling failure.
+llm = [
+    "anthropic>=0.40",
 ]
 
 [project.scripts]

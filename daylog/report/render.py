@@ -114,9 +114,14 @@ def render_markdown(report: Report) -> str:
 
     lines.append("## Draft for the timesheet")
     lines.append("")
-    if report.draft_lines:
-        for line in report.draft_lines:
-            lines.append(f"- {line}")
+    if report.llm_used:
+        lines.append("_Polished by Claude — see draft_lines for the plain rule-based version._")
+        lines.append("")
+    elif report.llm_error:
+        lines.append(f"> ⚠️ LLM polishing skipped: {report.llm_error}")
+        lines.append("")
+    if report.draft_text:
+        lines.append(report.draft_text)
     else:
         lines.append("_Nothing to report yet._")
     lines.append("")
@@ -165,6 +170,9 @@ def render_json(report: Report) -> Dict[str, Any]:
         ],
         "wip_by_repo": [{"repo": rw.repo, "files": rw.files} for rw in report.wip_by_repo],
         "draft_lines": report.draft_lines,
+        "draft_text": report.draft_text,
+        "llm_used": report.llm_used,
+        "llm_error": report.llm_error,
         "timeline": [
             {
                 "app": b.app,

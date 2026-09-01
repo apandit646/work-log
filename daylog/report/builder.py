@@ -16,21 +16,29 @@ Three entry points, deliberately kept separate:
   calendar — viewing a day never re-collects.
 - generate_report() is refresh_day() + load_report(), with the just-
   collected availability overlaid onto the Report so its accurate for
-  the day being actively generated. This is what `daylog report` calls.
+  the day being actively generated. This is also where the optional
+  Phase 9 LLM polish (config.llm.enabled) runs, if requested — never in
+  load_report(), matching the same "only at generate time" rule as the
+  git/calendar collectors.
 
-The future JSON API (Phase 6) calls load_report() alone for GET, and
-generate_report() only for the explicit POST regenerate endpoint.
+The JSON API calls load_report() alone for GET, and generate_report()
+only for the explicit POST regenerate endpoint.
+
+week_overview() is a separate, cheaper aggregate (status/minutes/commits
+per day plus a week-wide category breakdown) for the read-only Week
+dashboard — it never touches collectors either.
 """
 from __future__ import annotations
 
 import dataclasses
 import datetime as _dt
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .. import storage
 from ..collectors import calendar as calendar_collector
 from ..collectors import git as git_collector
 from . import draft as draft_module
+from . import render as render_module
 from .types import ActivityBlockInfo, CommitInfo, MeetingInfo, Report, RepoCommits, RepoWip
 
 if TYPE_CHECKING:
@@ -95,7 +103,7 @@ def load_report(conn: "sqlite3.Connection", day: str) -> Report:
     existing_summary = storage.get_day_summary(conn, day)
     status = existing_summary.status if existing_summary else "draft"
 
-    return Report(
+    report = Report(
         day=day,
         status=status,
         generated_at=_dt.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -111,7 +119,12 @@ def load_report(conn: "sqlite3.Connection", day: str) -> Report:
         git_error=None,
         calendar_available=True,
         calendar_error=None,
+        draft_text="",
+        llm_used=False,
+        llm_error=None,
     )
+    report.draft_text = render_module.render_draft_text(report)
+    return report
 
 
 def day_overview(conn: "sqlite3.Connection", day: str) -> Dict[str, object]:
@@ -135,14 +148,72 @@ def list_days_overview(conn: "sqlite3.Connection", limit: int = 30) -> List[Dict
 
 def generate_report(config: "Config", conn: "sqlite3.Connection", day: str) -> Report:
     """refresh_day() + load_report(), with the just-collected availability
-    overlaid so the result accurately reflects this run, not a guess."""
+    overlaid so the result accurately reflects this run, not a guess.
+    Also where the optional LLM polish (config.llm.enabled) runs, if
+    requested — see the module docstring for why that's here and not in
+    load_report()."""
     refresh = refresh_day(config, conn, day)
     report = load_report(conn, day)
     report.git_available = refresh.git_available
     report.git_error = refresh.git_error
     report.calendar_available = refresh.calendar_available
     report.calendar_error = refresh.calendar_error
+
+    if config.llm.enabled and report.draft_lines:
+        from .. import llm  # local import: keep the optional `anthropic` package
+
+        # out of every code path except the one that actually opts in
+        polished, error = llm.polish_draft(report.draft_lines, model=config.llm.model)
+        if polished is not None:
+            report.draft_text = polished
+            report.llm_used = True
+            report.llm_error = None
+        else:
+            report.llm_used = False
+            report.llm_error = error
+
     return report
+
+
+def week_overview(conn: "sqlite3.Connection", end_day: str) -> Dict[str, Any]:
+    """Read-only aggregate for the 7 days ending at end_day (inclusive) —
+    the local Week dashboard (Phase 9). Never touches collectors, same
+    read-only guarantee as load_report()."""
+    end_date = _dt.date.fromisoformat(end_day)
+    days = [(end_date - _dt.timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+
+    day_rows: List[Dict[str, Any]] = []
+    category_totals: Dict[str, float] = {}
+    total_minutes = 0.0
+    total_commits = 0
+
+    for day in days:
+        blocks = _load_activity_blocks(conn, day)
+        day_minutes = sum(b.minutes for b in blocks)
+        for category, minutes in _category_totals(blocks):
+            category_totals[category] = category_totals.get(category, 0.0) + minutes
+        commit_count = len(storage.get_commits(conn, day))
+        summary = storage.get_day_summary(conn, day)
+        day_rows.append(
+            {
+                "day": day,
+                "total_tracked_minutes": round(day_minutes, 1),
+                "commit_count": commit_count,
+                "status": summary.status if summary else None,
+            }
+        )
+        total_minutes += day_minutes
+        total_commits += commit_count
+
+    ranked_categories = sorted(category_totals.items(), key=lambda item: item[1], reverse=True)
+    return {
+        "start": days[0],
+        "end": days[-1],
+        "days": day_rows,
+        "total_tracked_minutes": round(total_minutes, 1),
+        "total_commits": total_commits,
+        "category_totals": [{"category": c, "minutes": round(m, 1)} for c, m in ranked_categories],
+    }
 
 
 def _load_activity_blocks(conn: "sqlite3.Connection", day: str) -> List[ActivityBlockInfo]:

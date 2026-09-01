@@ -193,3 +193,52 @@ def test_report_without_config_gives_a_clear_error(daylog_home, capsys):
     exit_code = main(["report"])
     assert exit_code == 1
     assert "daylog init" in capsys.readouterr().out
+
+
+def test_report_persists_llm_polished_text_when_enabled(daylog_home, capsys, monkeypatch):
+    _init_with_no_collectors(daylog_home)
+    day = "2026-09-01"
+    _seed_activity(day)
+    _mock_one_commit(monkeypatch, day)
+
+    cfg = default_config()
+    cfg.git.scan_paths = []
+    cfg.calendar.ics_urls = []
+    cfg.llm.enabled = True
+    save_config(cfg)
+
+    import daylog.llm as llm_module
+    monkeypatch.setattr(llm_module, "polish_draft", lambda lines, model=None: ("- Improved reliability.", None))
+
+    exit_code = main(["report", "--date", day])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "polished by claude" in err.lower()
+
+    with storage.open_db() as conn:
+        summary = storage.get_day_summary(conn, day)
+    assert summary.generated_md == "- Improved reliability."
+
+
+def test_report_falls_back_and_warns_when_llm_fails(daylog_home, capsys, monkeypatch):
+    _init_with_no_collectors(daylog_home)
+    day = "2026-09-01"
+    _mock_one_commit(monkeypatch, day)
+
+    cfg = default_config()
+    cfg.git.scan_paths = []
+    cfg.calendar.ics_urls = []
+    cfg.llm.enabled = True
+    save_config(cfg)
+
+    import daylog.llm as llm_module
+    monkeypatch.setattr(llm_module, "polish_draft", lambda lines, model=None: (None, "ANTHROPIC_API_KEY is not set"))
+
+    exit_code = main(["report", "--date", day])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "llm polishing skipped" in err.lower()
+
+    with storage.open_db() as conn:
+        summary = storage.get_day_summary(conn, day)
+    assert summary.generated_md == "- Added retry logic in proj."

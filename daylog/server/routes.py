@@ -9,7 +9,7 @@ there is nothing else that could be calling it.
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
@@ -89,6 +89,16 @@ def list_days(limit: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
     return {"days": days}
 
 
+@router.get("/week")
+def get_week(date: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """Read-only week dashboard (Phase 9): the 7 days ending at `date`
+    (default today). Never touches git/calendar/network — same guarantee
+    as GET /api/days/{day}."""
+    end_day = _validate_day(date) if date else _dt.date.today().isoformat()
+    with storage.open_db() as conn:
+        return report_builder.week_overview(conn, end_day)
+
+
 def _summary_fields(conn, day: str) -> Dict[str, Any]:
     """generated_md/edited_md/current_text/submitted_at/updated_at — the
     persisted, editable-by-hand fields that live in day_summaries, not on
@@ -130,8 +140,9 @@ def regenerate_day(day: str) -> Dict[str, Any]:
         had_unsaved_edits = storage.has_unsaved_edits(conn, day)
         report = report_builder.generate_report(cfg, conn, day)
         # Only the timesheet-paste-ready bullets are persisted as
-        # generated_md — see render_draft_text()'s docstring.
-        storage.save_generated_summary(conn, day, report_render.render_draft_text(report))
+        # generated_md — report.draft_text is the plain rule-based join,
+        # or the LLM-polished rewrite of it if config.llm.enabled succeeded.
+        storage.save_generated_summary(conn, day, report.draft_text)
         result = report_render.render_json(report)
         result.update(_summary_fields(conn, day))
     # Edits are never destroyed (generated_md and edited_md are separate

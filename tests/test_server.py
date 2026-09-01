@@ -286,3 +286,78 @@ def test_tracker_stop_when_not_running_is_a_noop(client):
     resp = client.post("/api/tracker/stop")
     assert resp.status_code == 200
     assert resp.json()["stopped"] is True
+
+
+# --- GET /api/week (Phase 9 read-only week dashboard) -----------------------
+
+
+def test_get_week_defaults_to_the_week_ending_today(client):
+    resp = client.get("/api/week")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["days"]) == 7
+    import datetime
+
+    assert data["end"] == datetime.date.today().isoformat()
+
+
+def test_get_week_accepts_an_explicit_end_date(client):
+    resp = client.get("/api/week", params={"date": "2026-09-07"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["start"] == "2026-09-01"
+    assert data["end"] == "2026-09-07"
+
+
+def test_get_week_aggregates_tracked_time(client):
+    _seed_activity("2026-09-03")
+    resp = client.get("/api/week", params={"date": "2026-09-07"})
+    data = resp.json()
+    assert data["total_tracked_minutes"] == 60.0
+    by_day = {d["day"]: d for d in data["days"]}
+    assert by_day["2026-09-03"]["total_tracked_minutes"] == 60.0
+    assert by_day["2026-09-01"]["status"] is None  # never generated -> "Missed"
+
+
+def test_get_week_invalid_date_returns_400(client):
+    resp = client.get("/api/week", params={"date": "not-a-date"})
+    assert resp.status_code == 400
+
+
+def test_get_week_never_touches_collectors(client, monkeypatch):
+    def boom(config, day):
+        raise AssertionError("week dashboard must not call the git collector")
+
+    monkeypatch.setattr("daylog.report.builder.git_collector.collect", boom)
+    resp = client.get("/api/week", params={"date": "2026-09-07"})
+    assert resp.status_code == 200
+
+
+# --- LLM polish surfaced through the API (Phase 9) --------------------------
+
+
+def test_regenerate_includes_llm_fields_when_disabled(client):
+    resp = client.post("/api/days/2026-09-01/regenerate")
+    data = resp.json()
+    assert data["llm_used"] is False
+    assert data["llm_error"] is None
+
+
+def test_regenerate_uses_polished_text_when_llm_enabled(client, monkeypatch):
+    import daylog.llm as llm_module
+    from daylog.collectors.git import Commit, GitCollection, RepoResult
+
+    commit = Commit(repo="proj", hash="aaa1234567", subject="add retry logic", branch="main",
+                     timestamp="2026-09-01T09:00:00+00:00", additions=5, deletions=1)
+    git_result = GitCollection(available=True, repos=[RepoResult(name="proj", path="/tmp/proj", commits=[commit])])
+    monkeypatch.setattr("daylog.report.builder.git_collector.collect", lambda config, day: git_result)
+    monkeypatch.setattr(llm_module, "polish_draft", lambda lines, model=None: ("- Improved reliability.", None))
+
+    cfg = default_config()
+    cfg.llm.enabled = True
+    save_config(cfg)
+
+    resp = client.post("/api/days/2026-09-01/regenerate")
+    data = resp.json()
+    assert data["llm_used"] is True
+    assert data["generated_md"] == "- Improved reliability."

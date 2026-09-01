@@ -1,6 +1,8 @@
 """Report generation tested against a fixture database with known data,
 asserting exact totals — including a day spanning a DST change and a day
 with zero activity."""
+import datetime as dt
+
 import pytest
 
 from daylog import storage
@@ -212,3 +214,141 @@ def test_generate_report_overlays_fresh_availability(conn, monkeypatch):
     assert report.git_available is False
     assert "git is not installed" in report.git_error
     assert report.calendar_available is True
+
+
+# --- optional LLM polish (Phase 9) -----------------------------------------
+
+
+def test_load_report_never_uses_llm_even_when_enabled(conn):
+    """load_report() has no config parameter at all — it's structurally
+    incapable of calling the LLM, which is the point (pure read, see the
+    module docstring)."""
+    day = "2026-09-01"
+    storage.replace_commits_cache(conn, day, [
+        {"repo": "proj", "hash": "aaa1", "subject": "add retry logic", "branch": "main",
+         "timestamp": f"{day}T09:00:00+00:00", "additions": 5, "deletions": 1},
+    ])
+    report = builder.load_report(conn, day)
+    assert report.llm_used is False
+    assert report.draft_text == "- Added retry logic in proj."
+
+
+def _mock_one_commit_collector(monkeypatch):
+    """generate_report() always calls refresh_day() first, which re-runs
+    the real git collector and would wipe a hand-seeded commits_cache row
+    (git is "available", just finds nothing at the default — nonexistent
+    — scan_paths). Mocking the collector is what makes a seeded commit
+    survive through to generate_report()'s draft."""
+    from daylog.collectors.git import Commit, GitCollection, RepoResult
+
+    commit = Commit(
+        repo="proj", hash="aaa1234567", subject="add retry logic", branch="main",
+        timestamp="2026-09-01T09:00:00+00:00", additions=5, deletions=1,
+    )
+    result = GitCollection(available=True, repos=[RepoResult(name="proj", path="/tmp/proj", commits=[commit])])
+    monkeypatch.setattr(builder.git_collector, "collect", lambda config, day: result)
+
+
+def test_generate_report_uses_plain_draft_when_llm_disabled(conn, monkeypatch):
+    day = "2026-09-01"
+    _mock_one_commit_collector(monkeypatch)
+    cfg = default_config()
+    assert cfg.llm.enabled is False
+
+    report = builder.generate_report(cfg, conn, day)
+    assert report.llm_used is False
+    assert report.llm_error is None
+    assert report.draft_text == "- Added retry logic in proj."
+
+
+def test_generate_report_uses_polished_text_when_llm_succeeds(conn, monkeypatch):
+    day = "2026-09-01"
+    _mock_one_commit_collector(monkeypatch)
+    cfg = default_config()
+    cfg.llm.enabled = True
+
+    import daylog.llm as llm_module
+    monkeypatch.setattr(llm_module, "polish_draft", lambda lines, model=None: ("- Improved upload reliability.", None))
+
+    report = builder.generate_report(cfg, conn, day)
+    assert report.llm_used is True
+    assert report.llm_error is None
+    assert report.draft_text == "- Improved upload reliability."
+
+
+def test_generate_report_falls_back_to_plain_draft_when_llm_fails(conn, monkeypatch):
+    day = "2026-09-01"
+    _mock_one_commit_collector(monkeypatch)
+    cfg = default_config()
+    cfg.llm.enabled = True
+
+    import daylog.llm as llm_module
+    monkeypatch.setattr(llm_module, "polish_draft", lambda lines, model=None: (None, "ANTHROPIC_API_KEY is not set"))
+
+    report = builder.generate_report(cfg, conn, day)
+    assert report.llm_used is False
+    assert report.llm_error == "ANTHROPIC_API_KEY is not set"
+    assert report.draft_text == "- Added retry logic in proj."  # fell back, not lost
+
+
+def test_generate_report_skips_llm_when_there_is_no_draft(conn, monkeypatch):
+    day = "2026-09-01"  # no commits/meetings seeded — nothing to polish
+    cfg = default_config()
+    cfg.llm.enabled = True
+
+    import daylog.llm as llm_module
+    calls = {"n": 0}
+    monkeypatch.setattr(llm_module, "polish_draft", lambda lines, model=None: calls.__setitem__("n", calls["n"] + 1) or (None, None))
+
+    report = builder.generate_report(cfg, conn, day)
+    assert calls["n"] == 0  # never called — nothing to polish
+    assert report.draft_text == ""
+    assert report.llm_used is False
+
+
+# --- week_overview (Phase 9 read-only week dashboard) -----------------------
+
+
+def test_week_overview_aggregates_seven_days(conn):
+    end_day = "2026-09-07"
+    for offset, minutes in [(0, 30), (3, 60), (6, 90)]:
+        day = (dt.date.fromisoformat(end_day) - dt.timedelta(days=6 - offset)).isoformat()
+        end = (dt.datetime.fromisoformat(f"{day}T09:00:00+00:00") + dt.timedelta(minutes=minutes)).isoformat()
+        storage.insert_activity_block(conn, day, f"{day}T09:00:00+00:00", end, "Code", "x", "Coding")
+
+    result = builder.week_overview(conn, end_day)
+
+    assert result["start"] == "2026-09-01"
+    assert result["end"] == "2026-09-07"
+    assert len(result["days"]) == 7
+    assert result["total_tracked_minutes"] == pytest.approx(30 + 60 + 90)
+    assert dict(zip([d["day"] for d in result["days"]], [d["total_tracked_minutes"] for d in result["days"]]))["2026-09-01"] == 30.0
+
+
+def test_week_overview_marks_days_with_no_summary_as_missed(conn):
+    day = "2026-09-01"
+    storage.save_generated_summary(conn, day, "- did work")
+
+    result = builder.week_overview(conn, "2026-09-07")
+    by_day = {d["day"]: d["status"] for d in result["days"]}
+    assert by_day[day] == "draft"
+    assert by_day["2026-09-02"] is None  # never generated -> "Missed" in the UI
+
+
+def test_week_overview_aggregates_categories_across_days(conn):
+    storage.insert_activity_block(conn, "2026-09-01", "2026-09-01T09:00:00+00:00", "2026-09-01T09:30:00+00:00", "Code", "x", "Coding")
+    storage.insert_activity_block(conn, "2026-09-02", "2026-09-02T09:00:00+00:00", "2026-09-02T09:15:00+00:00", "Code", "x", "Coding")
+    storage.insert_activity_block(conn, "2026-09-03", "2026-09-03T09:00:00+00:00", "2026-09-03T09:20:00+00:00", "Teams", "x", "Meetings")
+
+    result = builder.week_overview(conn, "2026-09-07")
+    by_cat = {c["category"]: c["minutes"] for c in result["category_totals"]}
+    assert by_cat["Coding"] == pytest.approx(45.0)
+    assert by_cat["Meetings"] == pytest.approx(20.0)
+
+
+def test_week_overview_empty_week_does_not_crash(conn):
+    result = builder.week_overview(conn, "2026-09-07")
+    assert result["total_tracked_minutes"] == 0.0
+    assert result["total_commits"] == 0
+    assert result["category_totals"] == []
+    assert len(result["days"]) == 7

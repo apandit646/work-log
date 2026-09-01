@@ -88,3 +88,12 @@ class Report:
     git_error: Optional[str]
     calendar_available: bool
     calendar_error: Optional[str]
+
+    # The text that actually gets persisted/pasted: draft_lines rendered
+    # plain, or the LLM-polished rewrite of them when config.llm.enabled
+    # and the call succeeds (Phase 9, optional — see daylog/llm.py).
+    # load_report() (pure read, no config) always sets this to the plain
+    # rendering; only generate_report() may set llm_used=True.
+    draft_text: str
+    llm_used: bool
+    llm_error: Optional[str]

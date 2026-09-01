@@ -66,6 +66,15 @@ class ServerConfig:
 
 
 @dataclasses.dataclass
+class LlmConfig:
+    # Off by default (Phase 9, optional). The API key is read from the
+    # ANTHROPIC_API_KEY environment variable at call time — never stored
+    # here, since this file is plain JSON on disk.
+    enabled: bool = False
+    model: str = "claude-opus-5"
+
+
+@dataclasses.dataclass
 class Config:
     version: int
     user: UserConfig
@@ -74,6 +83,7 @@ class Config:
     calendar: CalendarConfig
     categories: list[CategoryRule]
     server: ServerConfig
+    llm: LlmConfig
 
 
 def default_config() -> Config:
@@ -97,6 +107,7 @@ def default_config() -> Config:
             CategoryRule("Other", []),
         ],
         server=ServerConfig(host="127.0.0.1", port=8765),
+        llm=LlmConfig(enabled=False, model="claude-opus-5"),
     )
 
 
@@ -116,6 +127,7 @@ def config_to_dict(cfg: Config) -> dict[str, Any]:
         },
         "categories": [{"name": c.name, "keywords": c.keywords} for c in cfg.categories],
         "server": {"host": cfg.server.host, "port": cfg.server.port},
+        "llm": {"enabled": cfg.llm.enabled, "model": cfg.llm.model},
     }
 
 
@@ -127,6 +139,7 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         git_d = data.get("git", {}) or {}
         cal_d = data.get("calendar", {}) or {}
         server_d = data.get("server", {}) or {}
+        llm_d = data.get("llm", {}) or {}
         categories_raw = data.get("categories")
 
         cfg = Config(
@@ -171,6 +184,10 @@ def config_from_dict(data: dict[str, Any]) -> Config:
                 host=str(server_d.get("host", defaults.server.host)),
                 port=int(server_d.get("port", defaults.server.port)),
             ),
+            llm=LlmConfig(
+                enabled=bool(llm_d.get("enabled", defaults.llm.enabled)),
+                model=str(llm_d.get("model", defaults.llm.model)),
+            ),
         )
     except (TypeError, ValueError, KeyError) as exc:
         raise ConfigError(f"config.json is malformed: {exc}") from exc
@@ -200,6 +217,8 @@ def _validate(cfg: Config) -> None:
     for rule in cfg.categories:
         if not rule.name:
             raise ConfigError("every category rule needs a non-empty 'name'")
+    if cfg.llm.enabled and not cfg.llm.model.strip():
+        raise ConfigError("llm.model must not be empty when llm.enabled is true")
 
 
 def config_exists(path: Optional[Path] = None) -> bool:

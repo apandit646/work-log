@@ -154,7 +154,9 @@ def cmd_report(args: argparse.Namespace) -> int:
             # generated_md — render_markdown()'s full multi-section report
             # (printed/--out below) isn't something you'd paste into an
             # office form, so it's never what the editable summary holds.
-            storage.save_generated_summary(conn, day, report_render.render_draft_text(report))
+            # draft_text is the plain rule-based join, or the LLM-polished
+            # rewrite of it if config.llm.enabled succeeded.
+            storage.save_generated_summary(conn, day, report.draft_text)
     except StorageError as exc:
         print(f"Could not generate report: {exc}")
         return 1
@@ -163,6 +165,10 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"Warning: {report.git_error}", file=sys.stderr)
     if not report.calendar_available and report.calendar_error:
         print(f"Warning: {report.calendar_error}", file=sys.stderr)
+    if report.llm_used:
+        print("Timesheet draft polished by Claude.", file=sys.stderr)
+    elif cfg.llm.enabled and report.llm_error:
+        print(f"Warning: LLM polishing skipped: {report.llm_error}", file=sys.stderr)
 
     if args.json:
         print(_json.dumps(report_render.render_json(report), indent=2))
@@ -174,7 +180,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"\nWrote report to {args.out}")
 
     if args.copy:
-        ok, error = clipboard.copy_to_clipboard(report_render.render_draft_text(report))
+        ok, error = clipboard.copy_to_clipboard(report.draft_text)
         if ok:
             print("\nTimesheet draft copied to clipboard.")
         else:

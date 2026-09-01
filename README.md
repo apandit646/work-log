@@ -6,15 +6,14 @@ Markdown summary you can paste into an end-of-day timesheet form.
 
 Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
-feature (not built yet).
+feature — off by default.
 
-This is a phased build. **All planned phases (1–8: skeleton/storage,
+This is a phased build. **All phases (1–9) are done**: skeleton/storage,
 window tracking, git collector, calendar collector, report generation,
-JSON API, web UI, packaging/autostart) are done.** Phase 9 (optional LLM
-draft-polishing, a read-only week dashboard) is unbuilt — it's explicitly
-opt-in scope, only built if asked for.
+JSON API, web UI, packaging/autostart, and the optional extras (LLM
+draft polishing, a read-only week dashboard).
 
-## Status: Phase 8 (feature-complete)
+## Status: complete (Phases 1–9)
 
 What exists right now:
 
@@ -60,6 +59,19 @@ What exists right now:
   collects today's commits (across all local branches, deduplicated,
   filtered to your identity) with lines added/removed, and lists
   uncommitted work in progress.
+- **LLM draft polishing** (optional, off by default) — rewrites the
+  timesheet draft with Claude for more natural phrasing. Needs `pip
+  install daylog[llm]` and `config.llm.enabled = true` (also toggleable
+  in the Settings screen); reads `ANTHROPIC_API_KEY` from the
+  environment, never from `config.json`. Falls back to the plain
+  rule-based draft automatically — never breaks report generation — if
+  the package isn't installed, the key is missing, or the call fails for
+  any reason.
+- **Week dashboard** — a read-only view of the last 7 days (`GET
+  /api/week`, the web UI's Week tab): total time and commits, a per-day
+  bar breakdown, and a week-wide category breakdown. Never touches git,
+  calendar, or the LLM — same read-only guarantee as `GET /api/days/
+  {date}`.
 
 ## Install
 
@@ -146,6 +158,8 @@ defaults on next load.
 | `categories` | Meetings / Coding / Browser / Communication / Other, each with keyword lists | Keyword-matched against app name and window title, first match wins, unmatched falls through to the last rule (`Other`). Must contain at least one rule. |
 | `server.host` | `127.0.0.1` | Web UI bind address. Only `127.0.0.1` or `localhost` are accepted — daylog refuses to be reachable from the network. |
 | `server.port` | `8765` | Web UI port. |
+| `llm.enabled` | `false` | Turns on LLM polishing of the timesheet draft (see "How report generation works"). Requires `pip install daylog[llm]` and `ANTHROPIC_API_KEY` in the environment — neither is checked at config-save time, only when a report is actually generated, and any failure falls back to the plain draft. |
+| `llm.model` | `claude-opus-5` | Model used for polishing. Must be non-empty when `llm.enabled` is `true`. |
 
 ## `daylog doctor` checks
 
@@ -291,9 +305,10 @@ EOF
   technical jargon (null pointer → "a crash", race condition → "a timing
   bug", …). It cannot infer domain-specific meaning like turning "the
   parser" into "the invoice parser" — that needs real language
-  understanding, which is exactly what the optional Phase 9 LLM-polish
-  feature (off by default) is for. Multiple non-trivial commits in the
-  same repo are merged into one line; `wip`/`typo`/formatting/merge
+  understanding, which is exactly what the optional LLM-polish feature
+  (off by default — see "The optional extras" below) is for. Multiple
+  non-trivial commits in the same repo are merged into one line;
+  `wip`/`typo`/formatting/merge
   commits are always excluded; meetings 15 minutes or under are excluded.
   Every line traces back to a real commit or meeting — nothing is
   invented.
@@ -320,6 +335,7 @@ and calls those.
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/days?limit=30` | Per-day overview (status, total tracked minutes, commit count) for the most recent days with any footprint. `status` is `null` for a day that's been tracked but never reported (the web UI's History view shows that as "Missed"). |
+| `GET /api/week?date=YYYY-MM-DD` | Read-only aggregate for the 7 days ending at `date` (default today): per-day totals/status plus a week-wide category breakdown. Never touches git/calendar/LLM — the web UI's Week tab. |
 | `GET /api/days/{date}` | The full report as JSON, plus the persisted summary fields (`generated_md`, `edited_md`, `current_text`, `submitted_at`, `updated_at`). Read-only: never touches git/calendar/network. A date with no data returns an empty report, not an error. |
 | `POST /api/days/{date}/regenerate` | Re-runs the collectors and replaces that day's cache (same semantics as `daylog report`). Blocked (`409`) on a submitted day. Response includes `had_unsaved_edits: bool` — edited text is never destroyed, but this tells the caller it's now stale. |
 | `PUT /api/days/{date}/summary` | Body `{"edited_md": "..."}`. Saves hand-edited text. Blocked (`409`) on a submitted day. |
@@ -344,7 +360,7 @@ daylog ui --no-browser # just starts the server, e.g. for scripting
 
 Plain HTML/CSS/JS (`daylog/web/`) — no framework, no npm, no build step;
 served as static files by the same FastAPI app as the JSON API, at `/`.
-Three screens, switched client-side (`app.js`):
+Four screens, switched client-side (`app.js`):
 
 - **Today** — date navigation, a status badge, three metric cards, a
   stacked timeline bar (hover a segment for app + time range), meetings
@@ -356,16 +372,50 @@ Three screens, switched client-side (`app.js`):
   the page and the unsaved text (and a pending-save indicator) comes
   right back. Regenerate/Copy/Mark submitted mirror the CLI; Copy uses
   the browser's clipboard API directly (no platform tool needed, unlike
-  the CLI's `--copy`).
+  the CLI's `--copy`). A small indicator next to the draft header shows
+  "Polished by Claude" or an LLM-skipped warning right after clicking
+  Regenerate, if `llm.enabled` is on.
+- **Week** — `GET /api/week`: total time/commits for the last 7 days, a
+  per-day bar breakdown (Missed days in red), and a category legend.
+  Read-only — no Regenerate button here.
 - **History** — `GET /api/days`, a row per day, click to jump to that
   day in Today. A day with no summary shows **Missed** in red.
 - **Settings** — edit `git.scan_paths`/`calendar.ics_urls`/categories
   and save back to `config.json` via `PUT /api/config`; Start/Stop the
-  tracker; Run doctor shows the same pass/fail list as the CLI.
+  tracker; toggle LLM polishing and its model; Run doctor shows the same
+  pass/fail list as the CLI.
 
 Light and dark mode both work (`prefers-color-scheme`, no toggle needed)
 via CSS custom properties in `style.css` — no CSS framework, and it's
 kept under 400 lines.
+
+## The optional extras
+
+Both off/inert by default, matching the rest of daylog's local-first
+design — neither is needed for the core tracking/report/timesheet
+workflow.
+
+- **LLM draft polishing** (`daylog/llm.py`) — rewrites the timesheet
+  draft bullets with Claude (`claude-opus-5` by default) for more
+  natural phrasing than the rule-based transformer can manage. Enable
+  with `pip install daylog[llm]` and `llm.enabled = true` (config.json or
+  the Settings screen); reads `ANTHROPIC_API_KEY` from the environment at
+  call time — it's never written to `config.json`, since that file lives
+  in plain text on disk and this is otherwise the only feature that makes
+  an outbound network call at all. Runs only when a day is actively
+  generated (`daylog report`, or the UI's Regenerate button) — never on a
+  plain read (`GET /api/days/{date}`, viewing History) — and only on the
+  rule-based draft's own output, so it can rephrase but never invent a
+  line with no commit/meeting behind it. On any failure (package not
+  installed, no key, no network, a rate limit, an API error) it falls
+  back to the plain rule-based draft and surfaces why — `daylog report`
+  prints a warning to stderr, the API's regenerate response carries
+  `llm_used`/`llm_error`, and the web UI shows the same next to the draft
+  box. `daylog report`/`daylog ui` behave identically whether or not this
+  extra is installed.
+- **Week dashboard** — `GET /api/week` and the web UI's Week tab; see
+  above. Purely additive: a new read-only aggregate view, no changes to
+  how any existing day is generated or stored.
 
 ## How autostart and the tray icon work
 

@@ -86,6 +86,7 @@ function setView(view) {
   document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === `view-${view}`));
   document.querySelectorAll(".nav-btn").forEach((el) => el.classList.toggle("active", el.dataset.view === view));
   if (view === "today") loadToday(state.date);
+  if (view === "week") loadWeek();
   if (view === "history") loadHistory();
   if (view === "settings") loadSettings();
 }
@@ -270,6 +271,20 @@ function renderSummaryBox(report) {
   $("#last-edited").textContent = report.updated_at ? `Last edited ${fmtTimestamp(report.updated_at)}` : "";
   $("#save-indicator").textContent = unsaved !== null ? "Unsaved changes (will save shortly)" : "";
 
+  // llm_used/llm_error only reflect the *last regenerate response* — a
+  // plain page load (GET) never calls the LLM, so this only lights up
+  // right after clicking Regenerate, not on every visit.
+  const llmIndicator = $("#llm-indicator");
+  if (report.llm_used) {
+    llmIndicator.textContent = "Polished by Claude";
+    llmIndicator.hidden = false;
+  } else if (report.llm_error) {
+    llmIndicator.textContent = `LLM polish skipped: ${report.llm_error}`;
+    llmIndicator.hidden = false;
+  } else {
+    llmIndicator.hidden = true;
+  }
+
   $("#btn-submit").hidden = report.status === "submitted";
   $("#btn-reopen").hidden = report.status !== "submitted";
 
@@ -386,6 +401,54 @@ $("#prev-day").addEventListener("click", () => loadToday(shiftDate(state.date, -
 $("#next-day").addEventListener("click", () => loadToday(shiftDate(state.date, 1)));
 
 // =========================================================================
+// Week — read-only dashboard, never touches collectors (Phase 9)
+// =========================================================================
+
+async function loadWeek() {
+  const daysEl = $("#week-days");
+  daysEl.innerHTML = "Loading…";
+  try {
+    const week = await apiGet("/week");
+    renderWeek(week);
+  } catch (err) {
+    daysEl.innerHTML = `<p class="empty-note">Could not load: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderWeek(week) {
+  $("#week-range").textContent = `Week of ${week.start} – ${week.end}`;
+  $("#week-total").textContent = fmtMinutes(week.total_tracked_minutes);
+  $("#week-commits").textContent = String(week.total_commits);
+
+  const maxMinutes = Math.max(1, ...week.days.map((d) => d.total_tracked_minutes));
+  $("#week-days").innerHTML = week.days
+    .map((d) => {
+      const pct = Math.min(100, (d.total_tracked_minutes / maxMinutes) * 100);
+      const status = d.status ? d.status : "Missed";
+      const statusClass = d.status ? "" : "status-missed";
+      return `<div class="week-day-row">
+        <span>${d.day}</span>
+        <span class="week-day-bar-track"><span class="week-day-bar-fill" style="width:${pct}%"></span></span>
+        <span>${fmtMinutes(d.total_tracked_minutes)}</span>
+        <span class="week-day-status ${statusClass}">${escapeHtml(status)}</span>
+      </div>`;
+    })
+    .join("");
+
+  const catsEl = $("#week-categories");
+  if (!week.category_totals.length) {
+    catsEl.innerHTML = `<p class="empty-note">No activity recorded this week.</p>`;
+    return;
+  }
+  catsEl.innerHTML = week.category_totals
+    .map(
+      (c, i) =>
+        `<div class="legend-item"><span class="legend-swatch" style="background:var(${CATEGORY_COLORS[i % CATEGORY_COLORS.length]})"></span>${escapeHtml(c.category)} &middot; ${fmtMinutes(c.minutes)}</div>`
+    )
+    .join("");
+}
+
+// =========================================================================
 // History
 // =========================================================================
 
@@ -435,6 +498,8 @@ async function loadSettingsConfig() {
     const cfg = await apiGet("/config");
     $("#settings-scan-paths").value = cfg.git.scan_paths.join("\n");
     $("#settings-ics-urls").value = cfg.calendar.ics_urls.join("\n");
+    $("#settings-llm-enabled").checked = cfg.llm.enabled;
+    $("#settings-llm-model").value = cfg.llm.model;
     renderCategoryRows(cfg.categories);
   } catch (err) {
     $("#settings-save-indicator").textContent = `Could not load config: ${err.message}`;
@@ -468,6 +533,8 @@ $("#btn-save-settings").addEventListener("click", async () => {
         .map((k) => k.trim())
         .filter(Boolean),
     }));
+    cfg.llm.enabled = $("#settings-llm-enabled").checked;
+    cfg.llm.model = $("#settings-llm-model").value.trim() || cfg.llm.model;
 
     await apiSend("PUT", "/config", cfg);
     indicator.textContent = "Saved";
