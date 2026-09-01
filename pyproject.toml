@@ -5,19 +5,25 @@ description = "Local-first daily activity tracker and timesheet drafter."
 requires-python = ">=3.9"
 readme = "README.md"
 
-# Core dependencies: none in Phase 1-3 — window tracking, git, and storage
-# are all standard library (ctypes, sqlite3, subprocess, argparse).
-# Later phases add narrowly-scoped third-party packages here, each with a
-# one-line reason for why the standard library isn't enough:
+# Window tracking, git, and storage (Phases 1-3) are all standard library
+# (ctypes, sqlite3, subprocess, argparse). Every dependency below is
+# narrowly scoped to one phase, with a one-line reason the standard
+# library isn't enough:
 #
-#   icalendar   (Phase 4) — correct RFC 5545 RRULE (recurring event)
-#                            expansion is impractical to hand-roll; the
-#                            standard library has no ICS parser at all.
-#   fastapi     (Phase 6) — JSON API server for the web UI.
-#   uvicorn     (Phase 6) — ASGI server to run the FastAPI app.
-#   pystray     (Phase 8) — optional system tray icon; the tool must work
-#                            fully without it.
-dependencies = []
+#   icalendar      (Phase 4) — RFC 5545 .ics parsing (VEVENT, VTIMEZONE,
+#                               EXDATE, all-day vs timed values); the
+#                               standard library has no ICS parser at all.
+#   python-dateutil (Phase 4) — RRULE (recurring event) expansion is
+#                               impractical and error-prone to hand-roll;
+#                               this is icalendar's own recommended pair.
+#   fastapi        (Phase 6) — JSON API server for the web UI.
+#   uvicorn        (Phase 6) — ASGI server to run the FastAPI app.
+#   pystray        (Phase 8) — optional system tray icon; the tool must
+#                               work fully without it.
+dependencies = [
+    "icalendar>=5.0",
+    "python-dateutil>=2.8",
+]
 
 [project.optional-dependencies]
 # Test tooling only — never installed for end users of the CLI.

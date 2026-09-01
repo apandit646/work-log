@@ -52,6 +52,11 @@ class GitConfig:
 class CalendarConfig:
     ics_urls: list[str] = dataclasses.field(default_factory=list)
     cache_minutes: int = 15
+    # Your own email as it appears in ATTENDEE lines, used to find your
+    # PARTSTAT and skip events you declined. Optional — STATUS:CANCELLED
+    # (how Google's private feed marks a decline) is always honored even
+    # if this is blank.
+    owner_email: str = ""
 
 
 @dataclasses.dataclass
@@ -80,7 +85,7 @@ def default_config() -> Config:
             scan_paths=[r"C:\Users\me\source", "~/code"],
             scan_depth=4,
         ),
-        calendar=CalendarConfig(ics_urls=[], cache_minutes=15),
+        calendar=CalendarConfig(ics_urls=[], cache_minutes=15, owner_email=""),
         categories=[
             CategoryRule("Meetings", ["teams", "zoom", "webex", "meet"]),
             CategoryRule(
@@ -107,6 +112,7 @@ def _cfg_to_dict(cfg: Config) -> dict[str, Any]:
         "calendar": {
             "ics_urls": cfg.calendar.ics_urls,
             "cache_minutes": cfg.calendar.cache_minutes,
+            "owner_email": cfg.calendar.owner_email,
         },
         "categories": [{"name": c.name, "keywords": c.keywords} for c in cfg.categories],
         "server": {"host": cfg.server.host, "port": cfg.server.port},
@@ -151,6 +157,7 @@ def _dict_to_cfg(data: dict[str, Any]) -> Config:
                 cache_minutes=int(
                     cal_d.get("cache_minutes", defaults.calendar.cache_minutes)
                 ),
+                owner_email=str(cal_d.get("owner_email", defaults.calendar.owner_email)),
             ),
             categories=(
                 [

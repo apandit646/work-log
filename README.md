@@ -8,11 +8,11 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phases 1–3 (skeleton/storage, window tracking,
-git collector) are done.** The calendar collector, report generation, the
+This is a phased build. **Phases 1–4 (skeleton/storage, window tracking,
+git collector, calendar collector) are done.** Report generation, the
 JSON API, and the web UI land in later phases.
 
-## Status: Phase 3
+## Status: Phase 4
 
 What exists right now:
 
@@ -98,8 +98,9 @@ defaults on next load.
 | `tracking.idle_threshold_seconds` | `300` | Idle time (no keyboard/mouse input) after which a sample is dropped instead of recorded. |
 | `git.scan_paths` | `["C:\\Users\\me\\source", "~/code"]` | Directories to walk looking for `.git` repos. Edit to match your machine — a path that doesn't exist is skipped, not an error. |
 | `git.scan_depth` | `4` | How many directory levels deep to walk before giving up on a subtree. |
-| `calendar.ics_urls` | `[]` | Private iCal URLs (Outlook or Google Calendar both work — see Phase 4). |
+| `calendar.ics_urls` | `[]` | Private iCal URLs (Outlook/Microsoft 365 and Google Calendar both work — see "How the calendar collector works"). |
 | `calendar.cache_minutes` | `15` | How long a fetched `.ics` is cached before re-downloading. |
+| `calendar.owner_email` | `""` | Your email as it appears in `ATTENDEE` lines, used to find your own RSVP status and skip events you declined. Optional — a Google-style `STATUS:CANCELLED` decline is always honored even if this is blank. |
 | `categories` | Meetings / Coding / Browser / Communication / Other, each with keyword lists | Keyword-matched against app name and window title, first match wins, unmatched falls through to the last rule (`Other`). Must contain at least one rule. |
 | `server.host` | `127.0.0.1` | Web UI bind address. Only `127.0.0.1` or `localhost` are accepted — daylog refuses to be reachable from the network. |
 | `server.port` | `8765` | Web UI port. |
@@ -194,6 +195,32 @@ for repo in result.repos:
     print(repo.name, "-", len(repo.commits), "commits,", len(repo.wip), "changed files")
 EOF
 ```
+
+## How the calendar collector works
+
+- Point `calendar.ics_urls` at your private iCal feed URL(s) — Outlook/
+  Microsoft 365 (Settings → Calendar → Shared calendars → Publish a
+  calendar → ICS link) and Google Calendar (Settings → *your calendar* →
+  Integrate calendar → Secret address in iCal format) both expose the
+  same kind of URL, so one code path covers both; no OAuth.
+- Each feed is fetched over HTTPS and cached locally for
+  `calendar.cache_minutes` (default 15) so re-running the report doesn't
+  re-download every time. A network failure falls back to a stale cache
+  if one exists, rather than losing the day's meetings over a flaky
+  connection; with no cache at all, that source is marked unavailable
+  with a reason instead of crashing the collection.
+- Recurring events (`RRULE`) are expanded for the requested day only,
+  honoring `EXDATE`. All-day events and per-event timezones (`VTIMEZONE`/
+  `TZID`) are handled by the `icalendar`/`python-dateutil` parsing —
+  see collectors/calendar.py's module docstring for the one documented
+  scope gap (an individually-declined single occurrence of a recurring
+  series, rather than the whole series or a Google-style cancelled
+  export, may still appear once).
+- Declined events are skipped: a Google-style `STATUS:CANCELLED` export
+  is always honored; if `calendar.owner_email` is set, your own
+  `ATTENDEE`/`PARTSTAT=DECLINED` is checked too.
+- Not wired into the CLI yet — that lands with `daylog report` in
+  Phase 5.
 
 ## Design notes for later phases
 
