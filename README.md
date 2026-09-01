@@ -8,11 +8,11 @@ Everything lives on your machine at `~/.daylog/`. Nothing is uploaded
 anywhere unless you explicitly opt into the optional LLM-polishing
 feature (not built yet).
 
-This is a phased build. **Phases 1–2 (skeleton/storage, window tracking)
-are done.** Git/calendar collectors, report generation, the JSON API, and
-the web UI land in later phases.
+This is a phased build. **Phases 1–3 (skeleton/storage, window tracking,
+git collector) are done.** The calendar collector, report generation, the
+JSON API, and the web UI land in later phases.
 
-## Status: Phase 2
+## Status: Phase 3
 
 What exists right now:
 
@@ -30,6 +30,12 @@ What exists right now:
 - `daylog report` / `ui` exist as real subcommands (so `--help` shows the
   full planned shape of the tool) but currently just print which phase
   implements them.
+- `daylog.collectors.git` — discovers repos under `git.scan_paths`,
+  collects today's commits (across all local branches, deduplicated,
+  filtered to your identity) with lines added/removed, and lists
+  uncommitted work in progress. Not wired into the CLI yet — that lands
+  with `daylog report` in Phase 5. See "How the git collector works"
+  below for how to try it directly.
 
 ## Install (development)
 
@@ -139,6 +145,55 @@ defaults on next load.
 - **Windows**: `ctypes` against `user32`/`kernel32`
   (`GetForegroundWindow`, `QueryFullProcessImageNameW`,
   `GetLastInputInfo`) — no `pywin32` dependency.
+
+## How the git collector works
+
+- Discovers repos by walking each `git.scan_paths` entry up to
+  `git.scan_depth` levels, stopping (not descending further) as soon as it
+  finds a `.git` — so a repo's own internals, and nested repos like
+  submodules, are never scanned into. A path that doesn't exist or can't
+  be read is skipped, not an error.
+- "My commits" are decided by `user.git_author_patterns` — substrings
+  matched case-insensitively against `"Name <email>"`. If that list is
+  empty, each repo falls back to its own `git config user.name`/
+  `user.email`; if neither is set, that repo simply contributes no
+  commits (never a crash).
+- Collects commits from every local branch, not just the current one, and
+  deduplicates by hash so a commit reachable from two branches (e.g. a
+  shared ancestor) is only counted once — attributed to whichever branch
+  was processed first (current branch, then the rest). A detached HEAD is
+  still walked and labeled `"(detached HEAD)"`.
+- "Today" is decided by each commit's **author date** (not commit date,
+  which can differ after a rebase), compared as a plain calendar-day
+  string.
+- Uncommitted work in progress comes from `git status --porcelain`:
+  modified, added, deleted, renamed, and untracked files are all listed
+  per repo.
+- Nothing here raises for "no data" — no commits, an empty repo, a
+  detached HEAD, git itself missing (`GitCollection.available = False`)
+  all resolve to an empty/partial result. A single unreadable repo is
+  caught individually (`RepoResult.error`) so it doesn't take down the
+  whole collection.
+
+Try it directly (this isn't wired into the CLI until `daylog report` in
+Phase 5):
+
+```bash
+python3 - <<'EOF'
+import datetime
+from daylog.collectors import git
+from daylog.config import default_config
+
+cfg = default_config()
+cfg.git.scan_paths = [r"C:\Users\me\source", "~/code"]  # edit to a real path to try it
+cfg.user.git_author_patterns = ["you@example.com"]
+
+result = git.collect(cfg, datetime.date.today().isoformat())
+print("available:", result.available, result.error)
+for repo in result.repos:
+    print(repo.name, "-", len(repo.commits), "commits,", len(repo.wip), "changed files")
+EOF
+```
 
 ## Design notes for later phases
 
